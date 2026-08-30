@@ -24,12 +24,16 @@ struct ProcessedFile: Identifiable, Hashable {
     }
 }
 
-struct TableData {
-    let rows: [[String]]
+struct TableData: Codable {
+    var rows: [[String]]
     let columnCount: Int
     let rowCount: Int
     let confidence: Float
     let pageNumber: Int
+
+    enum CodingKeys: String, CodingKey {
+        case rows, columnCount, rowCount, confidence, pageNumber
+    }
 }
 
 // MARK: - TableData Extensions

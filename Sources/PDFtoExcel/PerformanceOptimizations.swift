@@ -87,16 +87,14 @@ class OptimizedPDFProcessor: ObservableObject {
         for chunkStart in stride(from: 0, to: pageCount, by: options.chunkSize) {
             let chunkEnd = min(chunkStart + options.chunkSize, pageCount)
             
-            // Create a new PDFDocument for this chunk to avoid memory accumulation
-            autoreleasepool {
-                let chunkTables = try await processChunk(
-                    pdfDocument: pdfDocument,
-                    startPage: chunkStart,
-                    endPage: chunkEnd,
-                    options: options
-                )
-                allTables.append(contentsOf: chunkTables)
-            }
+            // Process this chunk separately to avoid memory accumulation
+            let chunkTables = try await processChunk(
+                pdfDocument: pdfDocument,
+                startPage: chunkStart,
+                endPage: chunkEnd,
+                options: options
+            )
+            allTables.append(contentsOf: chunkTables)
             
             // Update progress
             await MainActor.run {
@@ -145,7 +143,7 @@ class OptimizedPDFProcessor: ObservableObject {
                         guard let self = self else { return [] }
                         
                         await semaphore.wait()
-                        defer { semaphore.signal() }
+                        defer { Task { await semaphore.signal() } }
                         
                         guard let page = pdfDocument.page(at: pageIndex) else { return [] }
                         
@@ -201,10 +199,7 @@ class OptimizedPDFProcessor: ObservableObject {
                     height: pageRect.height * scale
                 )
                 
-                guard let image = page.thumbnail(of: thumbnailSize, for: .mediaBox) else {
-                    continuation.resume(returning: [])
-                    return
-                }
+                let image = page.thumbnail(of: thumbnailSize, for: .mediaBox)
                 
                 guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
                     continuation.resume(returning: [])
@@ -318,7 +313,7 @@ class OptimizedPDFProcessor: ObservableObject {
         var enhancedTables: [(table: TableData, types: [DetectedDataType])] = []
         
         for table in tables {
-            let types = detector.detectColumnTypes(table)
+            let types = detector.detectColumnTypes(table: table)
             enhancedTables.append((table, types))
         }
         
@@ -488,9 +483,4 @@ class CachedTableData: NSObject, Codable {
     }
 }
 
-// Make TableData Codable for caching
-extension TableData: Codable {
-    enum CodingKeys: String, CodingKey {
-        case rows, columnCount, rowCount, confidence, pageNumber
-    }
-}
+// TableData's Codable conformance is declared in DataModels.swift.

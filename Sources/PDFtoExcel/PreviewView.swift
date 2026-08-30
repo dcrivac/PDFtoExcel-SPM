@@ -167,14 +167,10 @@ struct TablePreviewView: View {
                         ForEach(0..<tableContent.count, id: \.self) { rowIndex in
                             HStack(spacing: 0) {
                                 ForEach(0..<tableContent[rowIndex].count, id: \.self) { colIndex in
-                                    Text(tableContent[rowIndex][colIndex])
-                                        .font(.caption)
-                                        .lineLimit(2)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .frame(minWidth: 80)
-                                        .background(rowIndex == 0 ? Color.blue.opacity(0.2) : Color.clear)
-                                        .border(Color.separator, width: 1)
+                                    PreviewCell(
+                                        text: tableContent[rowIndex][colIndex],
+                                        isHeader: rowIndex == 0
+                                    )
                                 }
                             }
                         }
@@ -213,4 +209,23 @@ struct TablePreviewView: View {
         processedDate: Date(),
         fileSize: 1000
     ))
+}
+
+// MARK: - Preview Cell
+
+/// Extracted so the table body stays simple enough for the type checker.
+private struct PreviewCell: View {
+    let text: String
+    let isHeader: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .lineLimit(2)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(minWidth: 80)
+            .background(isHeader ? Color.blue.opacity(0.2) : Color.clear)
+            .border(Color(nsColor: .separatorColor), width: 1)
+    }
 }

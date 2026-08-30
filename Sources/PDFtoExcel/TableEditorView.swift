@@ -644,7 +644,7 @@ struct EditableCell: View {
                     }
             }
         }
-        .frame(width: 120, minHeight: 32)
+        .frame(minWidth: 120, maxWidth: 120, minHeight: 32)
         .onHover { hovering in
             onHover(hovering)
         }

@@ -580,7 +580,7 @@ struct CompletedFileRow: View {
             } label: {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.title2)
-                    .foregroundStyle(isSelected ? .blue : .tertiary)
+                    .foregroundStyle(isSelected ? AnyShapeStyle(.blue) : AnyShapeStyle(.tertiary))
             }
             .buttonStyle(.plain)
             
@@ -649,7 +649,7 @@ struct CompletedFileRow: View {
         .padding()
         .background {
             RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? .blue.opacity(0.1) : .ultraThinMaterial)
+                .fill(isSelected ? AnyShapeStyle(Color.blue.opacity(0.1)) : AnyShapeStyle(.ultraThinMaterial))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12)
                         .stroke(isSelected ? .blue : Color.clear, lineWidth: 1)
