@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>$(EXECUTABLE_NAME)</string>
+	<string>PDFtoExcel</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.pdftoexcel.app</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -40,9 +40,9 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMinimumSystemVersion</key>
-	<string>12.0</string>
+	<string>26.0</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>12.0</string>
+	<string>26.0</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -61,7 +61,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 		</dict>
-	</CFBundleDocumentTypes>
+	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -108,6 +108,6 @@
 				</array>
 			</dict>
 		</dict>
-	</UTExportedTypeDeclarations>
+	</array>
 </dict>
 </plist>
