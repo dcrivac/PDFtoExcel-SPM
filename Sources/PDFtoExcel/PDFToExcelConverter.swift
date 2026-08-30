@@ -9,6 +9,7 @@ import AppKit
 
 // Assuming ProcessedFile and ExcelWriter are defined elsewhere in the project
 
+@MainActor
 final class FileConversionManager: ObservableObject {
     @Published var isProcessing: Bool = false
     @Published var progress: Double = 0
@@ -26,21 +27,17 @@ final class FileConversionManager: ObservableObject {
         for (index, url) in urls.enumerated() {
             do {
                 let processed = try await convertSingleFile(url)
-                DispatchQueue.main.async {
-                    self.processedFiles.append(processed)
-                    self.progress = Double(index + 1) / Double(urls.count)
-                }
+                processedFiles.append(processed)
+                progress = Double(index + 1) / Double(urls.count)
             } catch {
                 logger.error("Failed to convert file \(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
         
-        DispatchQueue.main.async {
-            self.isProcessing = false
-        }
+        isProcessing = false
     }
     
-    func convertSingleFile(_ url: URL) async throws -> ProcessedFile {
+    nonisolated func convertSingleFile(_ url: URL) async throws -> ProcessedFile {
         // Basic validation: check file extension and PDF integrity
         guard url.pathExtension.lowercased() == "pdf" else {
             throw ConversionError.invalidFileExtension
@@ -68,12 +65,12 @@ final class FileConversionManager: ObservableObject {
     // MARK: - Stubs / Helpers
     
     /// Stub method to extract tables from a PDF page, returns an empty array by default
-    func extractTablesFromPage(_ page: PDFPage?, pageNumber: Int) -> [TableData] {
+    nonisolated func extractTablesFromPage(_ page: PDFPage?, pageNumber: Int) -> [TableData] {
         return []
     }
     
     /// Generates Excel file from extracted tables, uses ExcelWriter to write CSV, returns output URL
-    func generateExcelFile(from tables: [TableData], originalURL: URL) throws -> URL {
+    nonisolated func generateExcelFile(from tables: [TableData], originalURL: URL) throws -> URL {
         // Determine output URL in temporary directory with same base name but .csv extension
         let outputFileName = originalURL.deletingPathExtension().lastPathComponent + ".csv"
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(outputFileName)
