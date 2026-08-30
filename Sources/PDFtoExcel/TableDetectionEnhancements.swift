@@ -96,7 +96,7 @@ class EnhancedTableDetector {
         var currentTableRows: [[String]] = []
         var columnBoundaries: [CGFloat] = []
         
-        for (index, row) in rowGroups.enumerated() {
+        for row in rowGroups {
             // Extract column positions from current row
             let positions = extractColumnPositions(from: row)
             

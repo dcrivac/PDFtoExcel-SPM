@@ -42,21 +42,16 @@ class OptimizedPDFProcessor: ObservableObject {
         logger.info("Starting batch processing of \(totalFiles) files with optimizations")
         
         for (index, url) in urls.enumerated() {
-            autoreleasepool {
-                // Process each file in its own memory pool
-                Task {
-                    do {
-                        let result = try await self.processSinglePDFOptimized(url, options: options)
-                        results.append(result)
-                        
-                        await MainActor.run {
-                            self.progress = Double(index + 1) / Double(totalFiles)
-                            self.updateMemoryUsage()
-                        }
-                    } catch {
-                        self.logger.error("Failed to process \(url.lastPathComponent): \(error)")
-                    }
-                }
+            // Files are processed one at a time so peak memory stays bounded
+            // and the pressure check below can actually pace the loop.
+            do {
+                let result = try await processSinglePDFOptimized(url, options: options)
+                results.append(result)
+                
+                progress = Double(index + 1) / Double(totalFiles)
+                updateMemoryUsage()
+            } catch {
+                logger.error("Failed to process \(url.lastPathComponent): \(error)")
             }
             
             // Check memory pressure
@@ -261,9 +256,6 @@ class OptimizedPDFProcessor: ObservableObject {
     // MARK: - Memory Management
     
     private func shouldPauseForMemory() -> Bool {
-        let memoryInfo = ProcessInfo.processInfo
-        let physicalMemory = memoryInfo.physicalMemory
-        
         // Get current memory usage
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
