@@ -215,7 +215,9 @@ final class EnhancedTableDetector: Sendable {
     // MARK: - Helper Methods
     
     private func extractColumnPositions(from row: [VNRecognizedTextObservation]) -> [CGFloat] {
-        return row.map { $0.boundingBox.minX }
+        // Callers treat index order as column order, so keep these left to right
+        // regardless of the order the observations arrived in.
+        return row.map { $0.boundingBox.minX }.sorted()
     }
     
     private func calculateColumnSimilarity(_ positions1: [CGFloat], _ positions2: [CGFloat]) -> Float {
@@ -236,27 +238,34 @@ final class EnhancedTableDetector: Sendable {
     }
     
     private func extractTextFromRow(_ row: [VNRecognizedTextObservation], withColumns columns: [CGFloat]) -> [String] {
+        guard !columns.isEmpty else { return [] }
         var cells: [String] = Array(repeating: "", count: columns.count)
         
         for obs in row {
             guard let text = obs.topCandidates(1).first?.string else { continue }
             
-            // Find which column this text belongs to
+            // Assign to the nearest column reference rather than testing
+            // half-open intervals keyed on exact positions. Column references
+            // come from one sample row, and a cell sitting even slightly left of
+            // its own column's reference would fall into the previous column and
+            // overwrite whatever was already there. A couple of thousandths of a
+            // page of OCR jitter is enough to trigger it.
             let x = obs.boundingBox.minX
-            for (index, colX) in columns.enumerated() {
-                if index < columns.count - 1 {
-                    let nextColX = columns[index + 1]
-                    if x >= colX && x < nextColX {
-                        cells[index] = text
-                        break
-                    }
-                } else {
-                    // Last column
-                    if x >= colX {
-                        cells[index] = text
-                    }
+            var bestIndex = 0
+            var bestDistance = abs(columns[0] - x)
+            for (index, colX) in columns.enumerated().dropFirst() {
+                let distance = abs(colX - x)
+                if distance < bestDistance {
+                    bestDistance = distance
+                    bestIndex = index
                 }
             }
+            
+            // Two observations can land in one column when a cell wraps or OCR
+            // splits it. Join them instead of letting the last one win.
+            cells[bestIndex] = cells[bestIndex].isEmpty
+                ? text
+                : cells[bestIndex] + " " + text
         }
         
         return cells
