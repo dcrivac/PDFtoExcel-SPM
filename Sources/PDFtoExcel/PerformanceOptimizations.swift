@@ -405,18 +405,22 @@ actor AsyncSemaphore {
 
 // MARK: - Cache Manager for Performance
 
-class TableDetectionCache {
+/// - Note: `@unchecked` because `NSCache` carries no `Sendable` annotation
+///   despite being documented as safe to read and mutate from any thread.
+///   Every other stored property is an immutable `Sendable` value, and all
+///   file access goes through `FileManager.default`, whose thread-safety
+///   guarantee applies to that shared instance specifically.
+final class TableDetectionCache: @unchecked Sendable {
     static let shared = TableDetectionCache()
     
     private let cache = NSCache<NSString, CachedTableData>()
-    private let fileManager = FileManager.default
     private let cacheDirectory: URL
     
     init() {
         // Set up disk cache directory
-        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         cacheDirectory = caches.appendingPathComponent("PDFtoExcel/TableCache", isDirectory: true)
-        try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         
         // Configure memory cache
         cache.totalCostLimit = 100 * 1024 * 1024  // 100MB
@@ -431,7 +435,7 @@ class TableDetectionCache {
         
         // Check disk cache
         let diskURL = cacheDirectory.appendingPathComponent("\(pageHash).cache")
-        if fileManager.fileExists(atPath: diskURL.path) {
+        if FileManager.default.fileExists(atPath: diskURL.path) {
             if let data = try? Data(contentsOf: diskURL),
                let cached = try? JSONDecoder().decode(CachedTableData.self, from: data) {
                 // Promote to memory cache
@@ -460,12 +464,12 @@ class TableDetectionCache {
     
     func clearCache() {
         cache.removeAllObjects()
-        try? fileManager.removeItem(at: cacheDirectory)
-        try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: cacheDirectory)
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
     }
 }
 
-class CachedTableData: NSObject, Codable {
+final class CachedTableData: NSObject, Codable, Sendable {
     let tables: [TableData]
     let timestamp: Date
     
