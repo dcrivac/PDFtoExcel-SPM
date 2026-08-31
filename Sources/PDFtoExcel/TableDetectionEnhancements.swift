@@ -631,8 +631,15 @@ extension TableData {
             corrected = corrected.replacingOccurrences(of: "O", with: "0")
         }
         
-        // Common OCR mistakes in financial data
-        corrected = corrected.replacingOccurrences(of: "S", with: "$", options: .regularExpression, range: corrected.startIndex..<corrected.index(corrected.startIndex, offsetBy: min(1, corrected.count)))
+        // Common OCR mistakes in financial data.
+        //
+        // A leading "S" is a plausible misread of "$", but only when what
+        // follows is actually an amount. This substitution used to run against
+        // every cell, so any word starting with S was corrupted: "Sales" became
+        // "$ales", "South" became "$outh", "Sprocket" became "$procket".
+        if corrected.range(of: #"^S\d[\d,]*(\.\d{1,2})?$"#, options: .regularExpression) != nil {
+            corrected = "$" + corrected.dropFirst()
+        }
         
         // Fix percentage symbols
         if corrected.contains("o/o") {
