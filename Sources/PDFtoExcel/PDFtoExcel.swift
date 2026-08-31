@@ -241,111 +241,145 @@ class PDFToExcelConverter: ObservableObject {
         return try await extractTablesFromCGImage(cgImage, pageNumber: pageNumber, accuracy: accuracy)
     }
     
+    /// One OCR'd line: its vertical position and the text runs found on it.
+    private struct TextRow {
+        var y: CGFloat
+        var cells: [(x: CGFloat, text: String)]
+    }
+    
     private nonisolated func parseTextIntoTables(_ observations: [VNRecognizedTextObservation], pageNumber: Int) -> [TableData] {
-        // Sort observations by Y coordinate (top to bottom) then X coordinate (left to right)
-        let sortedObservations = observations.sorted { obs1, obs2 in
-            let y1 = obs1.boundingBox.origin.y
-            let y2 = obs2.boundingBox.origin.y
-            
-            if abs(y1 - y2) > 0.02 {
-                return y1 > y2 // Higher Y means earlier in document
-            } else {
-                return obs1.boundingBox.origin.x < obs2.boundingBox.origin.x // Left to right
-            }
-        }
+        let rows = groupObservationsIntoRows(observations)
         
-        // Group text into rows based on Y coordinates
-        var textRows: [(y: CGFloat, texts: [(x: CGFloat, text: String)])] = []
-        let yTolerance: CGFloat = 0.02
-        
-        for observation in sortedObservations {
-            guard let topCandidate = observation.topCandidates(1).first else { continue }
+        return splitRowsIntoTables(rows).compactMap { group -> TableData? in
+            // Two rows is the minimum that can establish a repeated structure.
+            guard group.count >= 2 else { return nil }
             
-            let y = observation.boundingBox.origin.y
-            let x = observation.boundingBox.origin.x
-            let text = topCandidate.string.trimmingCharacters(in: .whitespaces)
+            let columns = columnPositions(in: group)
+            guard columns.count >= 2 else { return nil }
             
-            // Skip empty text
-            guard !text.isEmpty else { continue }
-            
-            // Find existing row with similar Y coordinate
-            if let existingRowIndex = textRows.firstIndex(where: { abs($0.y - y) <= yTolerance }) {
-                textRows[existingRowIndex].texts.append((x: x, text: text))
-            } else {
-                textRows.append((y: y, texts: [(x: x, text: text)]))
-            }
-        }
-        
-        // Sort each row's text by X coordinate and convert to table rows
-        var tableRows: [[String]] = []
-        for textRow in textRows {
-            let sortedTexts = textRow.texts.sorted { $0.x < $1.x }
-            let rowData = sortedTexts.map { $0.text }
-            
-            // Only include rows with multiple columns or substantial content
-            if rowData.count > 1 || (rowData.count == 1 && rowData[0].count > 10) {
-                tableRows.append(rowData)
-            }
-        }
-        
-        // Filter and validate table structure
-        let validTables = identifyTableStructures(from: tableRows)
-        
-        return validTables.map { tableRows in
-            let maxColumns = tableRows.map { $0.count }.max() ?? 0
-            
-            // Normalize rows to have the same number of columns
-            let normalizedRows = tableRows.map { row in
-                var normalizedRow = row
-                while normalizedRow.count < maxColumns {
-                    normalizedRow.append("")
-                }
-                return normalizedRow
-            }
+            let tableRows = group.map { alignCells(of: $0, to: columns) }
             
             return TableData(
-                rows: normalizedRows,
-                columnCount: maxColumns,
-                rowCount: normalizedRows.count,
-                confidence: calculateTableConfidence(normalizedRows),
+                rows: tableRows,
+                columnCount: columns.count,
+                rowCount: tableRows.count,
+                confidence: calculateTableConfidence(tableRows),
                 pageNumber: pageNumber
             )
         }
     }
     
-    private nonisolated func identifyTableStructures(from rows: [[String]]) -> [[[String]]] {
-        guard rows.count >= 2 else { return [] }
+    /// Collect observations onto shared baselines, top to bottom.
+    private nonisolated func groupObservationsIntoRows(_ observations: [VNRecognizedTextObservation]) -> [TextRow] {
+        let yTolerance: CGFloat = 0.02
+        var rows: [TextRow] = []
         
-        var tables: [[[String]]] = []
-        var currentTable: [[String]] = []
-        var expectedColumnCount = 0
-        
-        for row in rows {
-            let columnCount = row.count
+        // midY rather than the bottom edge: cells on one line differ in height,
+        // so their baselines separate further than their centres do.
+        for observation in observations.sorted(by: { $0.boundingBox.midY > $1.boundingBox.midY }) {
+            guard let candidate = observation.topCandidates(1).first else { continue }
+            let text = candidate.string.trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty else { continue }
             
-            // Start new table if column structure changes significantly
-            if currentTable.isEmpty {
-                currentTable = [row]
-                expectedColumnCount = columnCount
-            } else if abs(columnCount - expectedColumnCount) <= 1 {
-                // Accept rows with similar column counts (allow Â±1 variance)
-                currentTable.append(row)
+            let y = observation.boundingBox.midY
+            let x = observation.boundingBox.minX
+            
+            if let index = rows.firstIndex(where: { abs($0.y - y) <= yTolerance }) {
+                rows[index].cells.append((x: x, text: text))
             } else {
-                // Column structure changed significantly, start new table
-                if currentTable.count >= 2 {
-                    tables.append(currentTable)
-                }
-                currentTable = [row]
-                expectedColumnCount = columnCount
+                rows.append(TextRow(y: y, cells: [(x: x, text: text)]))
             }
         }
         
-        // Add final table if it has enough rows
-        if currentTable.count >= 2 {
-            tables.append(currentTable)
+        for index in rows.indices {
+            rows[index].cells.sort { $0.x < $1.x }
+        }
+        return rows
+    }
+    
+    /// Break the page's rows where one table ends and the next begins.
+    ///
+    /// A row holding a single run is a heading rather than data, so it closes the
+    /// table above it and is isolated into a group of its own, which then falls
+    /// below the two-row minimum and is dropped. A vertical gap far larger than
+    /// the page's usual line spacing separates tables that carry no heading.
+    private nonisolated func splitRowsIntoTables(_ rows: [TextRow]) -> [[TextRow]] {
+        guard !rows.isEmpty else { return [] }
+        
+        var spacings: [CGFloat] = []
+        for index in 1..<max(rows.count, 1) {
+            spacings.append(rows[index - 1].y - rows[index].y)
+        }
+        let typicalSpacing = spacings.isEmpty ? 0 : spacings.sorted()[spacings.count / 2]
+        let spacingLimit = typicalSpacing * 2.5
+        
+        var groups: [[TextRow]] = []
+        var current: [TextRow] = []
+        
+        for (index, row) in rows.enumerated() {
+            let isHeading = row.cells.count == 1
+            let brokeVertically = index > 0
+                && typicalSpacing > 0
+                && (rows[index - 1].y - row.y) > spacingLimit
+            
+            if isHeading {
+                if !current.isEmpty { groups.append(current) }
+                groups.append([row])
+                current = []
+            } else if brokeVertically {
+                if !current.isEmpty { groups.append(current) }
+                current = [row]
+            } else {
+                current.append(row)
+            }
         }
         
-        return tables
+        if !current.isEmpty { groups.append(current) }
+        return groups
+    }
+    
+    /// Cluster the x positions occurring in these rows into column references.
+    private nonisolated func columnPositions(in rows: [TextRow]) -> [CGFloat] {
+        let tolerance: CGFloat = 0.02
+        let xs = rows.flatMap { $0.cells.map(\.x) }.sorted()
+        guard !xs.isEmpty else { return [] }
+        
+        var clusters: [[CGFloat]] = [[xs[0]]]
+        for x in xs.dropFirst() {
+            if let last = clusters[clusters.count - 1].last, x - last <= tolerance {
+                clusters[clusters.count - 1].append(x)
+            } else {
+                clusters.append([x])
+            }
+        }
+        return clusters.map { $0.reduce(0, +) / CGFloat($0.count) }
+    }
+    
+    /// Place each run in the column it sits under, leaving blanks where the
+    /// source row has no value.
+    ///
+    /// Taking the runs in x order and padding the end instead, as this used to,
+    /// silently shifts every value left of a blank cell into the wrong column.
+    private nonisolated func alignCells(of row: TextRow, to columns: [CGFloat]) -> [String] {
+        guard !columns.isEmpty else { return [] }
+        var cells = [String](repeating: "", count: columns.count)
+        
+        for cell in row.cells {
+            var bestIndex = 0
+            var bestDistance = abs(columns[0] - cell.x)
+            for (index, position) in columns.enumerated().dropFirst() {
+                let distance = abs(position - cell.x)
+                if distance < bestDistance {
+                    bestDistance = distance
+                    bestIndex = index
+                }
+            }
+            cells[bestIndex] = cells[bestIndex].isEmpty
+                ? cell.text
+                : cells[bestIndex] + " " + cell.text
+        }
+        
+        return cells
     }
     
     private nonisolated func calculateTableConfidence(_ rows: [[String]]) -> Float {
