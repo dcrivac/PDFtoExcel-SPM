@@ -14,7 +14,7 @@ import OSLog
 
 // MARK: - Enhanced Table Detection
 
-class EnhancedTableDetector {
+final class EnhancedTableDetector: Sendable {
     private let logger = Logger(subsystem: "com.pdftoexcel.app", category: "TableDetection")
     
     struct DetectionConfig {
@@ -28,7 +28,7 @@ class EnhancedTableDetector {
         var detectMergedCells: Bool = true
     }
     
-    private var config = DetectionConfig()
+    private let config = DetectionConfig()
     
     // MARK: - Advanced Table Detection
     

@@ -20,8 +20,8 @@ class OptimizedPDFProcessor: ObservableObject {
     @Published var currentOperation: String = ""
     @Published var memoryUsage: String = "0 MB"
     
-    private let logger = Logger(subsystem: "com.pdftoexcel.app", category: "OptimizedProcessor")
-    private let tableDetector = EnhancedTableDetector()
+    private nonisolated let logger = Logger(subsystem: "com.pdftoexcel.app", category: "OptimizedProcessor")
+    private nonisolated let tableDetector = EnhancedTableDetector()
     
     struct ProcessingOptions {
         var maxConcurrentPages: Int = ProcessInfo.processInfo.activeProcessorCount
@@ -66,7 +66,7 @@ class OptimizedPDFProcessor: ObservableObject {
     
     // MARK: - Single PDF Processing with Chunking
     
-    func processSinglePDFOptimized(_ url: URL, options: ProcessingOptions) async throws -> ProcessedFile {
+    nonisolated func processSinglePDFOptimized(_ url: URL, options: ProcessingOptions) async throws -> ProcessedFile {
         guard let pdfDocument = PDFDocument(url: url) else {
             throw ConversionError.invalidPDFFile
         }
@@ -121,7 +121,7 @@ class OptimizedPDFProcessor: ObservableObject {
     
     // MARK: - Parallel Chunk Processing
     
-    private func processChunk(
+    private nonisolated func processChunk(
         pdfDocument: PDFDocument,
         startPage: Int,
         endPage: Int,
@@ -178,7 +178,7 @@ class OptimizedPDFProcessor: ObservableObject {
     
     // MARK: - Optimized Page Processing
     
-    private func processPageOptimized(
+    private nonisolated func processPageOptimized(
         _ page: PDFPage,
         pageNumber: Int,
         options: ProcessingOptions
@@ -255,7 +255,7 @@ class OptimizedPDFProcessor: ObservableObject {
     
     // MARK: - Memory Management
     
-    private func shouldPauseForMemory() -> Bool {
+    private nonisolated func shouldPauseForMemory() -> Bool {
         // Get current memory usage
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
@@ -298,7 +298,7 @@ class OptimizedPDFProcessor: ObservableObject {
     
     // MARK: - Optimized Excel Generation
     
-    private func generateOptimizedExcelFile(from tables: [TableData], originalURL: URL) async throws -> URL {
+    private nonisolated func generateOptimizedExcelFile(from tables: [TableData], originalURL: URL) async throws -> URL {
         // Use data type detection for better formatting
         let detector = DataTypeDetector()
         
@@ -331,7 +331,7 @@ class OptimizedPDFProcessor: ObservableObject {
         return outputURL
     }
     
-    private func writeEnhancedCSV(_ enhancedTables: [(table: TableData, types: [DetectedDataType])], to url: URL) async throws {
+    private nonisolated func writeEnhancedCSV(_ enhancedTables: [(table: TableData, types: [DetectedDataType])], to url: URL) async throws {
         var csvContent = ""
         csvContent += "# Generated with Enhanced PDF to Excel Converter\n"
         csvContent += "# Confidence scores and data types detected\n\n"
@@ -365,7 +365,7 @@ class OptimizedPDFProcessor: ObservableObject {
         try csvContent.write(to: url, atomically: true, encoding: .utf8)
     }
     
-    private func escapeCSVCell(_ cell: String) -> String {
+    private nonisolated func escapeCSVCell(_ cell: String) -> String {
         if cell.contains(",") || cell.contains("\"") || cell.contains("\n") {
             return "\"\(cell.replacingOccurrences(of: "\"", with: "\"\""))\""
         }
