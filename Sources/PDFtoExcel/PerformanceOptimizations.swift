@@ -139,36 +139,45 @@ class OptimizedPDFProcessor: ObservableObject {
         if options.enableParallelProcessing {
             let maxConcurrent = max(1, min(options.maxConcurrentPages, 5))
             
-            return try await withThrowingTaskGroup(of: [TableData].self) { group in
+            return try await withThrowingTaskGroup(of: (pageIndex: Int, tables: [TableData]).self) { group in
                 var nextPageToQueue = startPage
-                var allTables: [TableData] = []
+                // Tasks finish out of order, so results are keyed by page and
+                // reassembled below rather than appended as they arrive.
+                var tablesByPage: [Int: [TableData]] = [:]
                 
                 // Fill the window
                 while nextPageToQueue < endPage && nextPageToQueue - startPage < maxConcurrent {
                     let pageIndex = nextPageToQueue
                     let image = renderPageImage(pdfDocument, at: pageIndex, scale: options.imageScale)
                     group.addTask { [weak self] in
-                        guard let self, let image else { return [] }
-                        return try await self.extractTables(from: image, pageNumber: pageIndex + 1, options: options)
+                        guard let self, let image else { return (pageIndex, []) }
+                        return (pageIndex, try await self.extractTables(from: image, pageNumber: pageIndex + 1, options: options))
                     }
                     nextPageToQueue += 1
                 }
                 
                 // Replace each finished page with the next one
-                for try await tables in group {
-                    allTables.append(contentsOf: tables)
+                for try await result in group {
+                    tablesByPage[result.pageIndex] = result.tables
                     
                     if nextPageToQueue < endPage {
                         let pageIndex = nextPageToQueue
                         let image = renderPageImage(pdfDocument, at: pageIndex, scale: options.imageScale)
                         group.addTask { [weak self] in
-                            guard let self, let image else { return [] }
-                            return try await self.extractTables(from: image, pageNumber: pageIndex + 1, options: options)
+                            guard let self, let image else { return (pageIndex, []) }
+                            return (pageIndex, try await self.extractTables(from: image, pageNumber: pageIndex + 1, options: options))
                         }
                         nextPageToQueue += 1
                     }
                 }
                 
+                // Reassemble in page order
+                var allTables: [TableData] = []
+                for pageIndex in startPage..<endPage {
+                    if let tables = tablesByPage[pageIndex] {
+                        allTables.append(contentsOf: tables)
+                    }
+                }
                 return allTables
             }
         } else {
