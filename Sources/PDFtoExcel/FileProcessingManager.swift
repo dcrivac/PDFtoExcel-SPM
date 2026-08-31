@@ -269,7 +269,7 @@ struct ProcessingStats {
 
 // MARK: - File Validator
 
-class FileValidator {
+final class FileValidator: Sendable {
     private let logger = Logger(subsystem: "com.pdftoexcel.app", category: "FileValidator")
     
     func validateFiles(_ urls: [URL]) async -> [ValidationResult] {
