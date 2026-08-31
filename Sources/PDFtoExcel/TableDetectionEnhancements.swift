@@ -23,6 +23,7 @@ final class EnhancedTableDetector: Sendable {
         var columnVarianceTolerance: Int = 2  // Allow up to 2 column variance
         var minTableRows: Int = 2
         var minConfidenceThreshold: Float = 0.4
+        var duplicateSimilarityThreshold: Float = 0.8
         var useWhitespaceDetection: Bool = true
         var useBorderDetection: Bool = true
         var detectMergedCells: Bool = true
@@ -369,47 +370,67 @@ final class EnhancedTableDetector: Sendable {
     }
     
     private func deduplicateAndFilter(_ tables: [TableData]) -> [TableData] {
-        // Remove duplicates based on content similarity
-        var uniqueTables: [TableData] = []
+        // Strongest candidates first, so that when several strategies recover
+        // the same table it is the highest-confidence version that survives.
+        let candidates = tables
+            .filter { $0.confidence >= config.minConfidenceThreshold }
+            .sorted { $0.confidence > $1.confidence }
         
-        for table in tables {
-            // Check if this table is similar to any already added
+        var uniqueTables: [TableData] = []
+        var acceptedCells: Set<String> = []
+        
+        for table in candidates {
+            let cells = distinctCells(of: table)
+            guard !cells.isEmpty else { continue }
+            
             let isDuplicate = uniqueTables.contains { existing in
-                calculateTableSimilarity(table, existing) > 0.8
+                calculateTableSimilarity(table, existing) > config.duplicateSimilarityThreshold
             }
             
-            if !isDuplicate && table.confidence >= config.minConfidenceThreshold {
+            // A strategy sometimes merges several real tables into one
+            // page-spanning result. That is not similar enough to any single
+            // table to be caught above, but it contributes nothing once the
+            // tables it spans have been accepted.
+            let coverage = Float(cells.intersection(acceptedCells).count) / Float(cells.count)
+            
+            if !isDuplicate && coverage <= config.duplicateSimilarityThreshold {
                 uniqueTables.append(table)
+                acceptedCells.formUnion(cells)
             }
         }
         
-        // Sort by confidence
-        return uniqueTables.sorted { $0.confidence > $1.confidence }
+        return uniqueTables
     }
     
+    /// How much of the smaller table's content also appears in the larger one.
+    ///
+    /// The three detection strategies routinely recover the same physical table
+    /// with different row and column splits, and one result is often close to a
+    /// subset of another. Comparing cell content rather than grid shape is what
+    /// lets those be recognised as the same table; a shape-keyed comparison
+    /// scores them as entirely dissimilar and keeps all of them.
     private func calculateTableSimilarity(_ table1: TableData, _ table2: TableData) -> Float {
-        guard table1.rowCount == table2.rowCount,
-              table1.columnCount == table2.columnCount else {
-            return 0
-        }
+        let cells1 = distinctCells(of: table1)
+        let cells2 = distinctCells(of: table2)
         
-        var matchingCells = 0
-        var totalCells = 0
+        guard !cells1.isEmpty, !cells2.isEmpty else { return 0 }
         
-        for (rowIndex, row1) in table1.rows.enumerated() {
-            guard rowIndex < table2.rows.count else { break }
-            let row2 = table2.rows[rowIndex]
-            
-            for (colIndex, cell1) in row1.enumerated() {
-                guard colIndex < row2.count else { break }
-                totalCells += 1
-                if cell1 == row2[colIndex] {
-                    matchingCells += 1
+        let shared = cells1.intersection(cells2).count
+        return Float(shared) / Float(min(cells1.count, cells2.count))
+    }
+    
+    /// Non-empty cell text, normalised for comparison.
+    private func distinctCells(of table: TableData) -> Set<String> {
+        var cells: Set<String> = []
+        for row in table.rows {
+            for cell in row {
+                let normalized = cell.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if !normalized.isEmpty {
+                    cells.insert(normalized)
                 }
             }
         }
-        
-        return totalCells > 0 ? Float(matchingCells) / Float(totalCells) : 0
+        return cells
     }
     
     // MARK: - Grid Structures
