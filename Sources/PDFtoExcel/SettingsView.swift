@@ -288,6 +288,7 @@ struct OutputSettingsView: View {
 
 struct AdvancedSettingsView: View {
     @AppStorage("settings.enableLogging") private var enableLogging: Bool = false
+    @AppStorage("settings.useOptimizedProcessor") private var useOptimizedProcessor: Bool = false
     @AppStorage("settings.maxConcurrentJobs") private var maxConcurrentJobs: Double = 4
     @AppStorage("settings.minimumTableSize") private var minimumTableSize: Double = 2
     
@@ -295,6 +296,12 @@ struct AdvancedSettingsView: View {
         VStack(spacing: 24) {
             SettingsSection(title: "Performance", icon: "speedometer") {
                 VStack(spacing: 16) {
+                    SettingsToggle(
+                        title: "Use Optimized Processor",
+                        subtitle: "Chunked, memory-aware engine with data type detection. Always writes CSV, ignoring the output format setting.",
+                        isOn: $useOptimizedProcessor
+                    )
+                    
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Maximum Concurrent Jobs: \(Int(maxConcurrentJobs))")
                             .font(.subheadline)

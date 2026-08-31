@@ -25,9 +25,21 @@ class PDFToExcelConverter: ObservableObject {
     nonisolated let logger = Logger(subsystem: "com.pdftoexcel.app", category: "Converter")
     private var cancellables = Set<AnyCancellable>()
     
+    /// Alternative engine, used when the "Use Optimized Processor" setting is on.
+    private let optimizedProcessor = OptimizedPDFProcessor()
+    
+    init() {
+        // The views observe this object, not the optimized engine, so mirror its
+        // per-page progress across while it is the one doing the work.
+        optimizedProcessor.$progress
+            .sink { [weak self] value in self?.progress = value }
+            .store(in: &cancellables)
+    }
+    
     @AppStorage("settings.outputFormat") private var outputFormatRaw: String = "csv"
     @AppStorage("settings.accuracy") private var accuracyRaw: String = "accurate"
     @AppStorage("settings.separateByPage") private var separateByPage: Bool = true
+    @AppStorage("settings.useOptimizedProcessor") private var useOptimizedProcessor: Bool = false
     
     enum OutputFormat: String { case csv, xlsx }
     enum RecognitionAccuracy: String { case fast, accurate }
@@ -82,6 +94,14 @@ class PDFToExcelConverter: ObservableObject {
     }
     
     public func convertSingleFile(_ url: URL) async throws -> ProcessedFile {
+        if useOptimizedProcessor {
+            logger.info("Converting \(url.lastPathComponent) with the optimized processor")
+            return try await optimizedProcessor.processSinglePDFOptimized(
+                url,
+                options: OptimizedPDFProcessor.ProcessingOptions()
+            )
+        }
+        
         // ⚡ TIER 2 OPTIMIZATION: Render serially, then OCR pages in parallel.
         // The document is opened off the main actor and stays there.
         let (allTables, pageCount) = try await processPagesConcurrently(
