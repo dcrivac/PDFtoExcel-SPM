@@ -148,7 +148,8 @@ extension PDFToExcelConverter {
 
                     let tables = try await self.extractTablesFromCGImage(
                         cgImage,
-                        pageNumber: pageIndex + 1
+                        pageNumber: pageIndex + 1,
+                        accuracy: self.recognitionAccuracy
                     )
 
                     // Filter by confidence

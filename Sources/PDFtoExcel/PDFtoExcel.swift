@@ -33,7 +33,7 @@ class PDFToExcelConverter: ObservableObject {
     enum RecognitionAccuracy: String { case fast, accurate }
     
     private var outputFormat: OutputFormat { OutputFormat(rawValue: outputFormatRaw) ?? .csv }
-    private var recognitionAccuracy: RecognitionAccuracy { RecognitionAccuracy(rawValue: accuracyRaw) ?? .accurate }
+    var recognitionAccuracy: RecognitionAccuracy { RecognitionAccuracy(rawValue: accuracyRaw) ?? .accurate }
     
     // MARK: - Public Methods
     
@@ -82,15 +82,12 @@ class PDFToExcelConverter: ObservableObject {
     }
     
     public func convertSingleFile(_ url: URL) async throws -> ProcessedFile {
-        // Load PDF document
-        guard let pdfDocument = PDFDocument(url: url) else {
-            throw ConversionError.invalidPDFFile
-        }
-        
-        let pageCount = pdfDocument.pageCount
-        
-        // ⚡ TIER 2 OPTIMIZATION: Process pages in parallel (3-4 concurrent)
-        let allTables = try await processPagesConcurrently(pdfDocument, pageCount: pageCount)
+        // ⚡ TIER 2 OPTIMIZATION: Render serially, then OCR pages in parallel.
+        // The document is opened off the main actor and stays there.
+        let (allTables, pageCount) = try await processPagesConcurrently(
+            at: url,
+            accuracy: recognitionAccuracy
+        )
         
         // Generate Excel file
         let outputURL = try generateExcelFile(from: allTables, originalURL: url)
@@ -111,35 +108,44 @@ class PDFToExcelConverter: ObservableObject {
     
     // MARK: - Parallel Page Processing (Tier 2 Optimization)
     
-    /// Process multiple PDF pages concurrently for faster conversion
+    /// Rasterize each page in turn, then OCR the rendered images concurrently.
+    ///
+    /// PDFKit is not documented as safe for concurrent access to a single
+    /// document, so the `PDFDocument` is opened and read entirely within this
+    /// task and never crosses into the child tasks. Only finished `CGImage`s,
+    /// which are immutable and `Sendable`, are handed to the OCR tasks.
+    ///
     /// - Parameters:
-    ///   - pdfDocument: The loaded PDF document
-    ///   - pageCount: Total number of pages
-    /// - Returns: Array of all TableData from all pages, sorted by page number
-    private func processPagesConcurrently(_ pdfDocument: PDFDocument, pageCount: Int) async throws -> [TableData] {
-        let maxConcurrentPages = 3  // Process 3 pages simultaneously
-        // Read once here, on the main actor, so the page work below can take it
-        // as a plain value instead of reaching back for main-actor state.
-        let accuracy = recognitionAccuracy
+    ///   - url: Location of the PDF to read
+    ///   - accuracy: Recognition accuracy, read from settings by the caller
+    /// - Returns: All TableData across the document, in page order, and the page count
+    private nonisolated func processPagesConcurrently(
+        at url: URL,
+        accuracy: RecognitionAccuracy
+    ) async throws -> (tables: [TableData], pageCount: Int) {
+        guard let pdfDocument = PDFDocument(url: url) else {
+            throw ConversionError.invalidPDFFile
+        }
+        
+        let pageCount = pdfDocument.pageCount
+        let maxConcurrentPages = 3  // OCR 3 pages simultaneously
         var allTablesByPage: [Int: [TableData]] = [:]
         var processedPagesCount = 0
         
         logger.info("Starting parallel page processing: \(pageCount) pages, \(maxConcurrentPages) concurrent")
         
-        // Use TaskGroup for concurrent processing
         try await withThrowingTaskGroup(of: (pageIndex: Int, tables: [TableData]).self) { group in
             var nextPageToQueue = 0
             
             // Queue initial batch of pages
             for _ in 0..<min(maxConcurrentPages, pageCount) {
                 let pageIndex = nextPageToQueue
+                let image = renderPage(pdfDocument, at: pageIndex)
                 group.addTask {
-                    guard let page = pdfDocument.page(at: pageIndex) else {
-                        return (pageIndex, [])
-                    }
+                    guard let image else { return (pageIndex, []) }
                     
                     self.logger.debug("Processing page \(pageIndex + 1)/\(pageCount)")
-                    let tables = try await self.extractTablesFromPage(page, pageNumber: pageIndex + 1, accuracy: accuracy)
+                    let tables = try await self.extractTablesFromCGImage(image, pageNumber: pageIndex + 1, accuracy: accuracy)
                     return (pageIndex, tables)
                 }
                 nextPageToQueue += 1
@@ -151,20 +157,20 @@ class PDFToExcelConverter: ObservableObject {
                 processedPagesCount += 1
                 
                 // Update progress
-                progress = Double(processedPagesCount) / Double(pageCount)
+                let fractionComplete = Double(processedPagesCount) / Double(pageCount)
+                await MainActor.run { self.progress = fractionComplete }
                 
-                self.logger.debug("Completed page \(result.pageIndex + 1), progress: \(String(format: "%.0f%%", self.progress * 100))")
+                logger.debug("Completed page \(result.pageIndex + 1), progress: \(String(format: "%.0f%%", fractionComplete * 100))")
                 
                 // Queue next page if available
                 if nextPageToQueue < pageCount {
                     let pageIndex = nextPageToQueue
+                    let image = renderPage(pdfDocument, at: pageIndex)
                     group.addTask {
-                        guard let page = pdfDocument.page(at: pageIndex) else {
-                            return (pageIndex, [])
-                        }
+                        guard let image else { return (pageIndex, []) }
                         
                         self.logger.debug("Processing page \(pageIndex + 1)/\(pageCount)")
-                        let tables = try await self.extractTablesFromPage(page, pageNumber: pageIndex + 1, accuracy: accuracy)
+                        let tables = try await self.extractTablesFromCGImage(image, pageNumber: pageIndex + 1, accuracy: accuracy)
                         return (pageIndex, tables)
                     }
                     nextPageToQueue += 1
@@ -181,11 +187,23 @@ class PDFToExcelConverter: ObservableObject {
         }
         
         logger.info("Parallel processing complete: found \(allTables.count) tables across \(pageCount) pages")
-        return allTables
+        return (allTables, pageCount)
     }
     
-    nonisolated func extractTablesFromPage(_ page: PDFPage, pageNumber: Int, accuracy: RecognitionAccuracy) async throws -> [TableData] {
-        // Get page bounds and create appropriate thumbnail
+    /// Rasterize one page for OCR.
+    ///
+    /// Only ever called from `processPagesConcurrently`'s own task, so PDFKit
+    /// sees a single reader of the document.
+    private nonisolated func renderPage(_ pdfDocument: PDFDocument, at pageIndex: Int) -> CGImage? {
+        guard let page = pdfDocument.page(at: pageIndex) else {
+            logger.warning("Could not load page \(pageIndex + 1)")
+            return nil
+        }
+        return renderImage(of: page, pageNumber: pageIndex + 1)
+    }
+    
+    /// Rasterize a page at OCR resolution.
+    nonisolated func renderImage(of page: PDFPage, pageNumber: Int) -> CGImage? {
         let pageRect = page.bounds(for: .mediaBox)
         let scale: CGFloat = 2.0 // Higher resolution for better OCR
         let thumbnailSize = CGSize(width: pageRect.width * scale, height: pageRect.height * scale)
@@ -193,47 +211,14 @@ class PDFToExcelConverter: ObservableObject {
         let thumbnail = page.thumbnail(of: thumbnailSize, for: .mediaBox)
         guard let cgImage = thumbnail.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             logger.warning("Failed to create thumbnail for page \(pageNumber)")
-            return []
+            return nil
         }
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            let request = VNRecognizeTextRequest { request, error in
-                if let error = error {
-                    self.logger.error("Vision text recognition failed: \(error.localizedDescription)")
-                    continuation.resume(throwing: ConversionError.visionProcessingError)
-                    return
-                }
-                
-                guard let observations = request.results as? [VNRecognizedTextObservation] else {
-                    continuation.resume(returning: [])
-                    return
-                }
-                
-                self.logger.info("Found \(observations.count) text observations on page \(pageNumber)")
-                let tables = self.parseTextIntoTables(observations, pageNumber: pageNumber)
-                continuation.resume(returning: tables)
-            }
-            
-            // Configure text recognition request
-            // ⚡ TIER 2: Keep accurate mode but disable language correction for speed
-            request.recognitionLevel = (accuracy == .accurate) ? .accurate : .fast
-            request.usesLanguageCorrection = false  // Disabled for speed (~10% faster)
-            request.recognitionLanguages = ["en-US"] // Add more languages as needed
-            
-            // Enable automatic language detection if available
-            if #available(macOS 13.0, *) {
-                request.automaticallyDetectsLanguage = true
-            }
-            
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-            
-            do {
-                try handler.perform([request])
-            } catch {
-                self.logger.error("Failed to perform Vision request: \(error.localizedDescription)")
-                continuation.resume(throwing: error)
-            }
-        }
+        return cgImage
+    }
+    
+    func extractTablesFromPage(_ page: PDFPage, pageNumber: Int, accuracy: RecognitionAccuracy) async throws -> [TableData] {
+        guard let cgImage = renderImage(of: page, pageNumber: pageNumber) else { return [] }
+        return try await extractTablesFromCGImage(cgImage, pageNumber: pageNumber, accuracy: accuracy)
     }
     
     private nonisolated func parseTextIntoTables(_ observations: [VNRecognizedTextObservation], pageNumber: Int) -> [TableData] {
@@ -373,7 +358,7 @@ class PDFToExcelConverter: ObservableObject {
         return (consistencyScore * 0.7) + (numericColumnScore * 0.3)
     }
     
-    func extractTablesFromCGImage(_ cgImage: CGImage, pageNumber: Int) async throws -> [TableData] {
+    nonisolated func extractTablesFromCGImage(_ cgImage: CGImage, pageNumber: Int, accuracy: RecognitionAccuracy) async throws -> [TableData] {
         return try await withCheckedThrowingContinuation { continuation in
             let request = VNRecognizeTextRequest { request, error in
                 if let error = error {
@@ -393,7 +378,7 @@ class PDFToExcelConverter: ObservableObject {
             }
 
             // ⚡ TIER 2: Keep accurate mode but disable language correction for speed
-            request.recognitionLevel = (self.recognitionAccuracy == .accurate) ? .accurate : .fast
+            request.recognitionLevel = (accuracy == .accurate) ? .accurate : .fast
             request.usesLanguageCorrection = false  // Disabled for speed (~10% faster)
             request.recognitionLanguages = ["en-US"]
             if #available(macOS 13.0, *) {

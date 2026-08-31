@@ -121,6 +121,14 @@ class OptimizedPDFProcessor: ObservableObject {
     
     // MARK: - Parallel Chunk Processing
     
+    /// Rasterize pages in turn, then OCR the rendered images concurrently.
+    ///
+    /// PDFKit is not documented as safe for concurrent access to a single
+    /// document, so pages are rendered on this task and only the resulting
+    /// `CGImage`s -- immutable and `Sendable` -- are handed to the OCR tasks.
+    ///
+    /// Rendering happens as each slot frees up rather than all at once, so at
+    /// most `maxConcurrentPages` page images are resident at a time.
     private nonisolated func processChunk(
         pdfDocument: PDFDocument,
         startPage: Int,
@@ -129,30 +137,36 @@ class OptimizedPDFProcessor: ObservableObject {
     ) async throws -> [TableData] {
         
         if options.enableParallelProcessing {
-            // Process pages in parallel using TaskGroup
+            let maxConcurrent = max(1, min(options.maxConcurrentPages, 5))
+            
             return try await withThrowingTaskGroup(of: [TableData].self) { group in
-                let semaphore = AsyncSemaphore(limit: min(options.maxConcurrentPages, 5))
+                var nextPageToQueue = startPage
+                var allTables: [TableData] = []
                 
-                for pageIndex in startPage..<endPage {
+                // Fill the window
+                while nextPageToQueue < endPage && nextPageToQueue - startPage < maxConcurrent {
+                    let pageIndex = nextPageToQueue
+                    let image = renderPageImage(pdfDocument, at: pageIndex, scale: options.imageScale)
                     group.addTask { [weak self] in
-                        guard let self = self else { return [] }
-                        
-                        await semaphore.wait()
-                        defer { Task { await semaphore.signal() } }
-                        
-                        guard let page = pdfDocument.page(at: pageIndex) else { return [] }
-                        
-                        return try await self.processPageOptimized(
-                            page,
-                            pageNumber: pageIndex + 1,
-                            options: options
-                        )
+                        guard let self, let image else { return [] }
+                        return try await self.extractTables(from: image, pageNumber: pageIndex + 1, options: options)
                     }
+                    nextPageToQueue += 1
                 }
                 
-                var allTables: [TableData] = []
+                // Replace each finished page with the next one
                 for try await tables in group {
                     allTables.append(contentsOf: tables)
+                    
+                    if nextPageToQueue < endPage {
+                        let pageIndex = nextPageToQueue
+                        let image = renderPageImage(pdfDocument, at: pageIndex, scale: options.imageScale)
+                        group.addTask { [weak self] in
+                            guard let self, let image else { return [] }
+                            return try await self.extractTables(from: image, pageNumber: pageIndex + 1, options: options)
+                        }
+                        nextPageToQueue += 1
+                    }
                 }
                 
                 return allTables
@@ -162,10 +176,10 @@ class OptimizedPDFProcessor: ObservableObject {
             var tables: [TableData] = []
             
             for pageIndex in startPage..<endPage {
-                guard let page = pdfDocument.page(at: pageIndex) else { continue }
+                guard let image = renderPageImage(pdfDocument, at: pageIndex, scale: options.imageScale) else { continue }
                 
-                let pageTables = try await processPageOptimized(
-                    page,
+                let pageTables = try await extractTables(
+                    from: image,
                     pageNumber: pageIndex + 1,
                     options: options
                 )
@@ -178,77 +192,79 @@ class OptimizedPDFProcessor: ObservableObject {
     
     // MARK: - Optimized Page Processing
     
-    private nonisolated func processPageOptimized(
-        _ page: PDFPage,
+    /// Rasterize one page for OCR.
+    ///
+    /// Only ever called from `processChunk`'s own task, so PDFKit sees a single
+    /// reader of the document.
+    private nonisolated func renderPageImage(_ pdfDocument: PDFDocument, at pageIndex: Int, scale: CGFloat) -> CGImage? {
+        autoreleasepool {
+            guard let page = pdfDocument.page(at: pageIndex) else { return nil }
+            
+            let pageRect = page.bounds(for: .mediaBox)
+            let thumbnailSize = CGSize(
+                width: pageRect.width * scale,
+                height: pageRect.height * scale
+            )
+            
+            let image = page.thumbnail(of: thumbnailSize, for: .mediaBox)
+            return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        }
+    }
+    
+    private nonisolated func extractTables(
+        from cgImage: CGImage,
         pageNumber: Int,
         options: ProcessingOptions
     ) async throws -> [TableData] {
         
         return try await withCheckedThrowingContinuation { continuation in
-            autoreleasepool {
-                // Create high-quality image for OCR
-                let pageRect = page.bounds(for: .mediaBox)
-                let scale = options.imageScale
-                let thumbnailSize = CGSize(
-                    width: pageRect.width * scale,
-                    height: pageRect.height * scale
-                )
-                
-                let image = page.thumbnail(of: thumbnailSize, for: .mediaBox)
-                
-                guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            // Configure Vision request with optimizations
+            let request = VNRecognizeTextRequest { [weak self] request, error in
+                guard let self = self else {
                     continuation.resume(returning: [])
                     return
                 }
                 
-                // Configure Vision request with optimizations
-                let request = VNRecognizeTextRequest { [weak self] request, error in
-                    guard let self = self else {
-                        continuation.resume(returning: [])
-                        return
-                    }
-                    
-                    if let error = error {
-                        self.logger.error("Vision error: \(error)")
-                        continuation.resume(returning: [])
-                        return
-                    }
-                    
-                    guard let observations = request.results as? [VNRecognizedTextObservation] else {
-                        continuation.resume(returning: [])
-                        return
-                    }
-                    
-                    // Use enhanced table detection
-                    let tables = self.tableDetector.detectTables(
-                        from: observations,
-                        pageNumber: pageNumber
-                    )
-                    
-                    continuation.resume(returning: tables)
+                if let error = error {
+                    self.logger.error("Vision error: \(error)")
+                    continuation.resume(returning: [])
+                    return
                 }
                 
-                // Configure for best quality
-                request.recognitionLevel = options.useHighQualityOCR ? .accurate : .fast
-                request.usesLanguageCorrection = true
-                request.recognitionLanguages = ["en-US", "es-ES", "fr-FR", "de-DE", "zh-Hans"]
-                
-                if #available(macOS 13.0, *) {
-                    request.automaticallyDetectsLanguage = true
+                guard let observations = request.results as? [VNRecognizedTextObservation] else {
+                    continuation.resume(returning: [])
+                    return
                 }
                 
-                // Set minimum confidence
-                request.minimumTextHeight = 0.01  // Detect smaller text
+                // Use enhanced table detection
+                let tables = self.tableDetector.detectTables(
+                    from: observations,
+                    pageNumber: pageNumber
+                )
                 
-                // Process with Vision
-                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                
-                do {
-                    try handler.perform([request])
-                } catch {
-                    self.logger.error("Vision processing failed: \(error)")
-                    continuation.resume(throwing: error)
-                }
+                continuation.resume(returning: tables)
+            }
+            
+            // Configure for best quality
+            request.recognitionLevel = options.useHighQualityOCR ? .accurate : .fast
+            request.usesLanguageCorrection = true
+            request.recognitionLanguages = ["en-US", "es-ES", "fr-FR", "de-DE", "zh-Hans"]
+            
+            if #available(macOS 13.0, *) {
+                request.automaticallyDetectsLanguage = true
+            }
+            
+            // Set minimum confidence
+            request.minimumTextHeight = 0.01  // Detect smaller text
+            
+            // Process with Vision
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            
+            do {
+                try handler.perform([request])
+            } catch {
+                self.logger.error("Vision processing failed: \(error)")
+                continuation.resume(throwing: error)
             }
         }
     }
