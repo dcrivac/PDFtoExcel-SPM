@@ -22,7 +22,7 @@ class PDFToExcelConverter: ObservableObject {
     @Published var processedFiles: [ProcessedFile] = []
     @Published var selectedFile: ProcessedFile?
     
-    let logger = Logger(subsystem: "com.pdftoexcel.app", category: "Converter")
+    nonisolated let logger = Logger(subsystem: "com.pdftoexcel.app", category: "Converter")
     private var cancellables = Set<AnyCancellable>()
     
     @AppStorage("settings.outputFormat") private var outputFormatRaw: String = "csv"
@@ -118,6 +118,9 @@ class PDFToExcelConverter: ObservableObject {
     /// - Returns: Array of all TableData from all pages, sorted by page number
     private func processPagesConcurrently(_ pdfDocument: PDFDocument, pageCount: Int) async throws -> [TableData] {
         let maxConcurrentPages = 3  // Process 3 pages simultaneously
+        // Read once here, on the main actor, so the page work below can take it
+        // as a plain value instead of reaching back for main-actor state.
+        let accuracy = recognitionAccuracy
         var allTablesByPage: [Int: [TableData]] = [:]
         var processedPagesCount = 0
         
@@ -136,7 +139,7 @@ class PDFToExcelConverter: ObservableObject {
                     }
                     
                     self.logger.debug("Processing page \(pageIndex + 1)/\(pageCount)")
-                    let tables = try await self.extractTablesFromPage(page, pageNumber: pageIndex + 1)
+                    let tables = try await self.extractTablesFromPage(page, pageNumber: pageIndex + 1, accuracy: accuracy)
                     return (pageIndex, tables)
                 }
                 nextPageToQueue += 1
@@ -148,9 +151,7 @@ class PDFToExcelConverter: ObservableObject {
                 processedPagesCount += 1
                 
                 // Update progress
-                DispatchQueue.main.async {
-                    self.progress = Double(processedPagesCount) / Double(pageCount)
-                }
+                progress = Double(processedPagesCount) / Double(pageCount)
                 
                 self.logger.debug("Completed page \(result.pageIndex + 1), progress: \(String(format: "%.0f%%", self.progress * 100))")
                 
@@ -163,7 +164,7 @@ class PDFToExcelConverter: ObservableObject {
                         }
                         
                         self.logger.debug("Processing page \(pageIndex + 1)/\(pageCount)")
-                        let tables = try await self.extractTablesFromPage(page, pageNumber: pageIndex + 1)
+                        let tables = try await self.extractTablesFromPage(page, pageNumber: pageIndex + 1, accuracy: accuracy)
                         return (pageIndex, tables)
                     }
                     nextPageToQueue += 1
@@ -183,7 +184,7 @@ class PDFToExcelConverter: ObservableObject {
         return allTables
     }
     
-    func extractTablesFromPage(_ page: PDFPage, pageNumber: Int) async throws -> [TableData] {
+    nonisolated func extractTablesFromPage(_ page: PDFPage, pageNumber: Int, accuracy: RecognitionAccuracy) async throws -> [TableData] {
         // Get page bounds and create appropriate thumbnail
         let pageRect = page.bounds(for: .mediaBox)
         let scale: CGFloat = 2.0 // Higher resolution for better OCR
@@ -215,7 +216,7 @@ class PDFToExcelConverter: ObservableObject {
             
             // Configure text recognition request
             // ⚡ TIER 2: Keep accurate mode but disable language correction for speed
-            request.recognitionLevel = (recognitionAccuracy == .accurate) ? .accurate : .fast
+            request.recognitionLevel = (accuracy == .accurate) ? .accurate : .fast
             request.usesLanguageCorrection = false  // Disabled for speed (~10% faster)
             request.recognitionLanguages = ["en-US"] // Add more languages as needed
             
@@ -235,7 +236,7 @@ class PDFToExcelConverter: ObservableObject {
         }
     }
     
-    private func parseTextIntoTables(_ observations: [VNRecognizedTextObservation], pageNumber: Int) -> [TableData] {
+    private nonisolated func parseTextIntoTables(_ observations: [VNRecognizedTextObservation], pageNumber: Int) -> [TableData] {
         // Sort observations by Y coordinate (top to bottom) then X coordinate (left to right)
         let sortedObservations = observations.sorted { obs1, obs2 in
             let y1 = obs1.boundingBox.origin.y
@@ -307,7 +308,7 @@ class PDFToExcelConverter: ObservableObject {
         }
     }
     
-    private func identifyTableStructures(from rows: [[String]]) -> [[[String]]] {
+    private nonisolated func identifyTableStructures(from rows: [[String]]) -> [[[String]]] {
         guard rows.count >= 2 else { return [] }
         
         var tables: [[[String]]] = []
@@ -342,7 +343,7 @@ class PDFToExcelConverter: ObservableObject {
         return tables
     }
     
-    private func calculateTableConfidence(_ rows: [[String]]) -> Float {
+    private nonisolated func calculateTableConfidence(_ rows: [[String]]) -> Float {
         guard rows.count >= 2 else { return 0.0 }
         
         let columnCount = rows.first?.count ?? 0
