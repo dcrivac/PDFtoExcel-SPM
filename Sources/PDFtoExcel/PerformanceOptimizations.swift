@@ -389,36 +389,6 @@ class OptimizedPDFProcessor: ObservableObject {
     }
 }
 
-// MARK: - Async Semaphore for Concurrency Control
-
-actor AsyncSemaphore {
-    private var count: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-    
-    init(limit: Int) {
-        self.count = limit
-    }
-    
-    func wait() async {
-        count -= 1
-        if count >= 0 {
-            return
-        }
-        
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
-        }
-    }
-    
-    func signal() {
-        count += 1
-        if !waiters.isEmpty {
-            let waiter = waiters.removeFirst()
-            waiter.resume()
-        }
-    }
-}
-
 // MARK: - Cache Manager for Performance
 
 /// - Note: `@unchecked` because `NSCache` carries no `Sendable` annotation
