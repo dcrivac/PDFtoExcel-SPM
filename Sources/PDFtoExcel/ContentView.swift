@@ -195,26 +195,23 @@ struct MainContentView: View {
     }
     
     private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
-        let urls = providers.compactMap { provider -> URL? in
-            var url: URL?
-            let semaphore = DispatchSemaphore(value: 0)
-            
-            _ = provider.loadObject(ofClass: URL.self) { loadedURL, _ in
-                url = loadedURL
-                semaphore.signal()
-            }
-            
-            semaphore.wait()
-            return url?.pathExtension.lowercased() == "pdf" ? url : nil
-        }
+        let urlProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }
+        guard !urlProviders.isEmpty else { return false }
         
-        if !urls.isEmpty {
-            Task {
-                await converter.convertFiles(urls)
+        // The drop is accepted up front: the handler runs on the main thread, so
+        // it cannot block waiting to find out which of these are really PDFs.
+        Task { @MainActor in
+            var urls: [URL] = []
+            for provider in urlProviders {
+                guard let url = await provider.loadURL(),
+                      url.pathExtension.lowercased() == "pdf" else { continue }
+                urls.append(url)
             }
-            return true
+            
+            guard !urls.isEmpty else { return }
+            await converter.convertFiles(urls)
         }
-        return false
+        return true
     }
 }
 
