@@ -274,14 +274,21 @@ class PDFToExcelConverter: ObservableObject {
         let yTolerance: CGFloat = 0.02
         var rows: [TextRow] = []
         
+        // A scanned page is rarely square to the platen, and past about two
+        // degrees the climb across a row exceeds the tolerance below, splitting
+        // one printed line into two. Level the page first.
+        let slope = TextSkew.estimateSlope(of: observations)
+        
         // midY rather than the bottom edge: cells on one line differ in height,
         // so their baselines separate further than their centres do.
-        for observation in observations.sorted(by: { $0.boundingBox.midY > $1.boundingBox.midY }) {
+        for observation in observations.sorted(by: {
+            TextSkew.deskewedY($0, slope: slope) > TextSkew.deskewedY($1, slope: slope)
+        }) {
             guard let candidate = observation.topCandidates(1).first else { continue }
             let text = candidate.string.trimmingCharacters(in: .whitespaces)
             guard !text.isEmpty else { continue }
             
-            let y = observation.boundingBox.midY
+            let y = TextSkew.deskewedY(observation, slope: slope)
             let x = observation.boundingBox.minX
             
             if let index = rows.firstIndex(where: { abs($0.y - y) <= yTolerance }) {

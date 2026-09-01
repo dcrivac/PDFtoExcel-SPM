@@ -57,19 +57,24 @@ final class EnhancedTableDetector: Sendable {
         var rowGroups: [[VNRecognizedTextObservation]] = []
         var processedObservations = Set<ObjectIdentifier>()
         
+        // A scanned page is rarely square to the platen, and past about a degree
+        // and a half the climb across a row exceeds the tolerance below,
+        // splitting one printed line into two. Level the page first.
+        let slope = TextSkew.estimateSlope(of: observations)
+        
         for observation in observations {
             guard !processedObservations.contains(ObjectIdentifier(observation)) else { continue }
             
             var currentRow = [observation]
             processedObservations.insert(ObjectIdentifier(observation))
             
-            let yCenter = observation.boundingBox.midY
+            let yCenter = TextSkew.deskewedY(observation, slope: slope)
             
             // Find all observations on the same horizontal line
             for other in observations {
                 guard !processedObservations.contains(ObjectIdentifier(other)) else { continue }
                 
-                let otherYCenter = other.boundingBox.midY
+                let otherYCenter = TextSkew.deskewedY(other, slope: slope)
                 if abs(yCenter - otherYCenter) <= config.yTolerance {
                     currentRow.append(other)
                     processedObservations.insert(ObjectIdentifier(other))
