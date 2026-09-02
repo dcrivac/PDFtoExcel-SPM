@@ -244,7 +244,32 @@ class PDFToExcelConverter: ObservableObject {
     /// One OCR'd line: its vertical position and the text runs found on it.
     private struct TextRow {
         var y: CGFloat
-        var cells: [(x: CGFloat, text: String)]
+        var cells: [Run]
+    }
+    
+    /// A run of text and the horizontal span it occupies.
+    private struct Run {
+        var minX: CGFloat
+        var maxX: CGFloat
+        var text: String
+    }
+    
+    /// Where a column's cells line up with one another.
+    ///
+    /// A column may be left, centre or right aligned, and only the matching
+    /// edge stays put as cell contents change width. Reading a centred column
+    /// by its left edge scatters every differently sized cell into a column of
+    /// its own.
+    private enum ColumnAnchor: CaseIterable {
+        case leading, center, trailing
+        
+        func position(of run: Run) -> CGFloat {
+            switch self {
+            case .leading:  return run.minX
+            case .center:   return (run.minX + run.maxX) / 2
+            case .trailing: return run.maxX
+            }
+        }
     }
     
     private nonisolated func parseTextIntoTables(_ observations: [VNRecognizedTextObservation], pageNumber: Int) -> [TableData] {
@@ -254,10 +279,11 @@ class PDFToExcelConverter: ObservableObject {
             // Two rows is the minimum that can establish a repeated structure.
             guard group.count >= 2 else { return nil }
             
-            let columns = columnPositions(in: group)
+            let layout = columnLayout(in: group)
+            let columns = layout.positions
             guard columns.count >= 2 else { return nil }
             
-            let tableRows = group.map { alignCells(of: $0, to: columns) }
+            let tableRows = group.map { alignCells(of: $0, to: columns, using: layout.anchor) }
             
             return TableData(
                 rows: tableRows,
@@ -289,17 +315,18 @@ class PDFToExcelConverter: ObservableObject {
             guard !text.isEmpty else { continue }
             
             let y = TextSkew.deskewedY(observation, slope: slope)
-            let x = observation.boundingBox.minX
+            let box = observation.boundingBox
             
+            let run = Run(minX: box.minX, maxX: box.maxX, text: text)
             if let index = rows.firstIndex(where: { abs($0.y - y) <= yTolerance }) {
-                rows[index].cells.append((x: x, text: text))
+                rows[index].cells.append(run)
             } else {
-                rows.append(TextRow(y: y, cells: [(x: x, text: text)]))
+                rows.append(TextRow(y: y, cells: [run]))
             }
         }
         
         for index in rows.indices {
-            rows[index].cells.sort { $0.x < $1.x }
+            rows[index].cells.sort { $0.minX < $1.minX }
         }
         return rows
     }
@@ -345,14 +372,61 @@ class PDFToExcelConverter: ObservableObject {
         return groups
     }
     
-    /// Cluster the x positions occurring in these rows into column references.
-    private nonisolated func columnPositions(in rows: [TextRow]) -> [CGFloat] {
-        let tolerance: CGFloat = 0.02
-        let xs = rows.flatMap { $0.cells.map(\.x) }.sorted()
-        guard !xs.isEmpty else { return [] }
+    /// Work out how this table's columns line up, and where they sit.
+    ///
+    /// The correct anchor is the one that actually collapses the table: read by
+    /// the wrong edge a column fragments into several, so the anchor yielding
+    /// the fewest columns that can still hold the widest row is the one the
+    /// table is really using.
+    private nonisolated func columnLayout(in rows: [TextRow]) -> (anchor: ColumnAnchor, positions: [CGFloat]) {
+        var best: (anchor: ColumnAnchor, positions: [CGFloat], occupancy: Double)?
         
-        var clusters: [[CGFloat]] = [[xs[0]]]
-        for x in xs.dropFirst() {
+        for anchor in ColumnAnchor.allCases {
+            let positions = cluster(rows.flatMap { $0.cells.map(anchor.position) })
+            guard positions.count >= 2 else { continue }
+            
+            // Read by the wrong edge, a column splits in two and each half sits
+            // empty on the rows that do not reach it. The right anchor is the
+            // one whose columns are actually filled.
+            let filled = rows.reduce(0) { total, row in
+                total + Set(row.cells.map { nearestColumn(to: anchor.position(of: $0), in: positions) }).count
+            }
+            let occupancy = Double(filled) / Double(rows.count * positions.count)
+            
+            // On a tie, more columns means a finer reading of the same layout.
+            let better = best.map { occupancy > $0.occupancy + 0.001
+                || (abs(occupancy - $0.occupancy) <= 0.001 && positions.count > $0.positions.count) } ?? true
+            if better {
+                best = (anchor, positions, occupancy)
+            }
+        }
+        
+        if let best { return (best.anchor, best.positions) }
+        return (.leading, cluster(rows.flatMap { $0.cells.map(ColumnAnchor.leading.position) }))
+    }
+    
+    /// Index of the column reference nearest a position.
+    private nonisolated func nearestColumn(to x: CGFloat, in columns: [CGFloat]) -> Int {
+        var bestIndex = 0
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for (index, position) in columns.enumerated() {
+            let distance = abs(position - x)
+            if distance < bestDistance {
+                bestDistance = distance
+                bestIndex = index
+            }
+        }
+        return bestIndex
+    }
+    
+    /// Group nearby positions into one reference each.
+    private nonisolated func cluster(_ values: [CGFloat]) -> [CGFloat] {
+        let tolerance: CGFloat = 0.02
+        let sorted = values.sorted()
+        guard !sorted.isEmpty else { return [] }
+        
+        var clusters: [[CGFloat]] = [[sorted[0]]]
+        for x in sorted.dropFirst() {
             if let last = clusters[clusters.count - 1].last, x - last <= tolerance {
                 clusters[clusters.count - 1].append(x)
             } else {
@@ -367,15 +441,16 @@ class PDFToExcelConverter: ObservableObject {
     ///
     /// Taking the runs in x order and padding the end instead, as this used to,
     /// silently shifts every value left of a blank cell into the wrong column.
-    private nonisolated func alignCells(of row: TextRow, to columns: [CGFloat]) -> [String] {
+    private nonisolated func alignCells(of row: TextRow, to columns: [CGFloat], using anchor: ColumnAnchor) -> [String] {
         guard !columns.isEmpty else { return [] }
         var cells = [String](repeating: "", count: columns.count)
         
         for cell in row.cells {
+            let x = anchor.position(of: cell)
             var bestIndex = 0
-            var bestDistance = abs(columns[0] - cell.x)
+            var bestDistance = abs(columns[0] - x)
             for (index, position) in columns.enumerated().dropFirst() {
-                let distance = abs(position - cell.x)
+                let distance = abs(position - x)
                 if distance < bestDistance {
                     bestDistance = distance
                     bestIndex = index
