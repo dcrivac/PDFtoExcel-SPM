@@ -420,24 +420,7 @@ class PDFToExcelConverter: ObservableObject {
     }
     
     nonisolated func extractTablesFromCGImage(_ cgImage: CGImage, pageNumber: Int, accuracy: RecognitionAccuracy) async throws -> [TableData] {
-        return try await withCheckedThrowingContinuation { continuation in
-            let request = VNRecognizeTextRequest { request, error in
-                if let error = error {
-                    self.logger.error("Vision text recognition failed: \(error.localizedDescription)")
-                    continuation.resume(throwing: ConversionError.visionProcessingError)
-                    return
-                }
-
-                guard let observations = request.results as? [VNRecognizedTextObservation] else {
-                    continuation.resume(returning: [])
-                    return
-                }
-
-                self.logger.info("Found \(observations.count) text observations on page \(pageNumber)")
-                let tables = self.parseTextIntoTables(observations, pageNumber: pageNumber)
-                continuation.resume(returning: tables)
-            }
-
+        let observations = try TextRecognition.observations(in: cgImage) { request in
             // ⚡ TIER 2: Keep accurate mode but disable language correction for speed
             request.recognitionLevel = (accuracy == .accurate) ? .accurate : .fast
             request.usesLanguageCorrection = false  // Disabled for speed (~10% faster)
@@ -445,15 +428,10 @@ class PDFToExcelConverter: ObservableObject {
             if #available(macOS 13.0, *) {
                 request.automaticallyDetectsLanguage = true
             }
-
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-            do {
-                try handler.perform([request])
-            } catch {
-                self.logger.error("Failed to perform Vision request: \(error.localizedDescription)")
-                continuation.resume(throwing: error)
-            }
         }
+        
+        logger.info("Found \(observations.count) text observations on page \(pageNumber)")
+        return parseTextIntoTables(observations, pageNumber: pageNumber)
     }
     
     func generateExcelFile(from tables: [TableData], originalURL: URL) throws -> URL {

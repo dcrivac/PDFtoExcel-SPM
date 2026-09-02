@@ -226,34 +226,7 @@ class OptimizedPDFProcessor: ObservableObject {
         options: ProcessingOptions
     ) async throws -> [TableData] {
         
-        return try await withCheckedThrowingContinuation { continuation in
-            // Configure Vision request with optimizations
-            let request = VNRecognizeTextRequest { [weak self] request, error in
-                guard let self = self else {
-                    continuation.resume(returning: [])
-                    return
-                }
-                
-                if let error = error {
-                    self.logger.error("Vision error: \(error)")
-                    continuation.resume(returning: [])
-                    return
-                }
-                
-                guard let observations = request.results as? [VNRecognizedTextObservation] else {
-                    continuation.resume(returning: [])
-                    return
-                }
-                
-                // Use enhanced table detection
-                let tables = self.tableDetector.detectTables(
-                    from: observations,
-                    pageNumber: pageNumber
-                )
-                
-                continuation.resume(returning: tables)
-            }
-            
+        let observations = try TextRecognition.observations(in: cgImage) { request in
             // Configure for best quality
             request.recognitionLevel = options.useHighQualityOCR ? .accurate : .fast
             request.usesLanguageCorrection = true
@@ -265,17 +238,10 @@ class OptimizedPDFProcessor: ObservableObject {
             
             // Set minimum confidence
             request.minimumTextHeight = 0.01  // Detect smaller text
-            
-            // Process with Vision
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-            
-            do {
-                try handler.perform([request])
-            } catch {
-                self.logger.error("Vision processing failed: \(error)")
-                continuation.resume(throwing: error)
-            }
         }
+        
+        // Use enhanced table detection
+        return tableDetector.detectTables(from: observations, pageNumber: pageNumber)
     }
     
     // MARK: - Memory Management

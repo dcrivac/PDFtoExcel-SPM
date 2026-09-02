@@ -5,6 +5,7 @@
 //  Page tilt estimation for OCR output.
 //
 
+import CoreImage
 import Foundation
 import Vision
 
@@ -27,6 +28,34 @@ enum TextSkew {
     private static let slopeStep: CGFloat = 0.002
     /// Roughly a quarter of the spacing between printed lines.
     private static let bandHeight: CGFloat = 0.008
+    
+    /// Tilt above which it is worth re-reading a levelled image.
+    ///
+    /// Vision copes with a few degrees on its own; measured against simulated
+    /// scans it only started dropping words between three and four degrees, so
+    /// straighter pages would pay for a second recognition pass and gain
+    /// nothing.
+    static let rereadThreshold: CGFloat = 2.0 * .pi / 180
+    
+    /// The page tilt this slope represents.
+    ///
+    /// Slopes are measured in Vision's normalized space, where both axes run 0
+    /// to 1, so the page's aspect ratio has to be restored to get a real angle.
+    static func angle(forSlope slope: CGFloat, imageSize: CGSize) -> CGFloat {
+        guard imageSize.width > 0 else { return 0 }
+        return atan(slope * imageSize.height / imageSize.width)
+    }
+    
+    /// The image rotated back to level, or nil if it could not be rendered.
+    static func levelled(_ image: CGImage, byRotating angle: CGFloat) -> CGImage? {
+        let source = CIImage(cgImage: image)
+        // Rotating expands the bounds; render the whole rotated extent so no
+        // corner of the page is cropped away.
+        let rotated = source.transformed(by: CGAffineTransform(rotationAngle: -angle))
+        return sharedContext.createCGImage(rotated, from: rotated.extent)
+    }
+    
+    private static let sharedContext = CIContext()
     
     /// Vertical position of an observation once the page is levelled.
     static func deskewedY(_ observation: VNRecognizedTextObservation, slope: CGFloat) -> CGFloat {
