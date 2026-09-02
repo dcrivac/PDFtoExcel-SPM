@@ -196,25 +196,18 @@ final class EnhancedTableDetector: Sendable {
     // MARK: - Bordered Table Detection
     
     private func detectBorderedTables(_ runs: [TextRun], pageNumber: Int) -> [TableData] {
-        // Look for runs that form grid patterns
-        var gridCells: [GridCell] = []
-        
-        for run in runs {
-            let cell = GridCell(
-                text: run.text,
-                bounds: run.boundingBox,
-                confidence: run.confidence
-            )
-            gridCells.append(cell)
-        }
-        
-        // Sort cells into grid structure
-        let grid = organizeIntoGrid(gridCells)
+        // Sort runs into grid structure
+        let grid = organizeIntoGrid(runs)
         
         guard !grid.isEmpty else { return [] }
         
+        // Where this page's columns sit, read across every row rather than
+        // from any one of them, so a row that skips a column is still placed
+        // against the same references as its neighbours.
+        let columns = findColumnClusters(runs)
+        
         // Convert grid to table data
-        return [convertGridToTableData(grid, pageNumber: pageNumber)]
+        return [convertGridToTableData(grid, columns: columns, pageNumber: pageNumber)]
     }
     
     // MARK: - Helper Methods
@@ -466,64 +459,54 @@ final class EnhancedTableDetector: Sendable {
     
     // MARK: - Grid Structures
     
-    private struct GridCell {
-        let text: String
-        let bounds: CGRect
-        let confidence: Float
-    }
-    
-    private func organizeIntoGrid(_ cells: [GridCell]) -> [[GridCell]] {
-        guard !cells.isEmpty else { return [] }
+    private func organizeIntoGrid(_ runs: [TextRun]) -> [[TextRun]] {
+        guard !runs.isEmpty else { return [] }
         
-        // Sort cells by Y position (top to bottom)
-        let sortedCells = cells.sorted { $0.bounds.midY > $1.bounds.midY }
+        // Sort runs by Y position (top to bottom)
+        let sortedRuns = runs.sorted { $0.midY > $1.midY }
         
-        var grid: [[GridCell]] = []
-        var currentRow: [GridCell] = []
-        var currentY = sortedCells.first?.bounds.midY ?? 0
+        var grid: [[TextRun]] = []
+        var currentRow: [TextRun] = []
+        var currentY = sortedRuns.first?.midY ?? 0
         
-        for cell in sortedCells {
-            if abs(cell.bounds.midY - currentY) <= config.yTolerance {
-                currentRow.append(cell)
+        for run in sortedRuns {
+            if abs(run.midY - currentY) <= config.yTolerance {
+                currentRow.append(run)
             } else {
                 if !currentRow.isEmpty {
                     // Sort row by X position
-                    currentRow.sort { $0.bounds.minX < $1.bounds.minX }
+                    currentRow.sort { $0.minX < $1.minX }
                     grid.append(currentRow)
                 }
-                currentRow = [cell]
-                currentY = cell.bounds.midY
+                currentRow = [run]
+                currentY = run.midY
             }
         }
         
         // Add final row
         if !currentRow.isEmpty {
-            currentRow.sort { $0.bounds.minX < $1.bounds.minX }
+            currentRow.sort { $0.minX < $1.minX }
             grid.append(currentRow)
         }
         
         return grid
     }
     
-    private func convertGridToTableData(_ grid: [[GridCell]], pageNumber: Int) -> TableData {
-        let rows = grid.map { row in
-            row.map { $0.text }
-        }
-        
-        let maxColumns = rows.map { $0.count }.max() ?? 0
-        let normalizedRows = rows.map { row in
-            var normalized = row
-            while normalized.count < maxColumns {
-                normalized.append("")
-            }
-            return normalized
-        }
+    /// Read a grid of runs off the page against a shared set of columns.
+    ///
+    /// Taking each row's cells in x order and padding the end, as this used to,
+    /// silently shifts every value left of a blank cell into the wrong column:
+    /// a row missing its second of three values reported that row's third value
+    /// as its second. Placing each run under the column it actually sits below
+    /// leaves the gap where the page has one.
+    private func convertGridToTableData(_ grid: [[TextRun]], columns: [CGFloat], pageNumber: Int) -> TableData {
+        let rows = grid.map { extractTextFromRow($0, withColumns: columns) }
         
         return TableData(
-            rows: normalizedRows,
-            columnCount: maxColumns,
-            rowCount: normalizedRows.count,
-            confidence: calculateEnhancedConfidence(normalizedRows),
+            rows: rows,
+            columnCount: columns.count,
+            rowCount: rows.count,
+            confidence: calculateEnhancedConfidence(rows),
             pageNumber: pageNumber
         )
     }

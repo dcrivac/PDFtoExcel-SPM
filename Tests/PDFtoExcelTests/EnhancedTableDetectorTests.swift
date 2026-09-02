@@ -80,19 +80,14 @@ struct EnhancedTableDetectorTests {
             ["Nut", "40", "0.75"],
         ], columnX: [0.1, 0.4, 0.7])
         
-        // Known issue: the bordered strategy's `convertGridToTableData` takes a
-        // row's cells in x order and pads the end, so a blank cell shifts every
-        // value after it one column left — "3.50" is reported under "Qty". The
-        // default engine fixed this by placing each cell in the column it sits
-        // under; the same fix has not been applied here. Remove the wrapper
-        // once it has.
-        withKnownIssue("Bordered strategy pads row ends instead of placing cells by position") {
-            let tables = detector.detectTables(from: runs, pageNumber: 1)
-            
-            #expect(tables.contains { table in
-                table.rows.contains { $0.count == 3 && $0[0] == "Bolt" && $0[2] == "3.50" }
-            })
-        }
+        let tables = detector.detectTables(from: runs, pageNumber: 1)
+        
+        #expect(tables.contains { table in
+            table.rows.contains { $0 == ["Bolt", "", "3.50"] }
+        })
+        #expect(!tables.contains { table in
+            table.rows.contains { $0 == ["Bolt", "3.50", ""] }
+        })
     }
     
     @Test("An empty page yields no tables")
