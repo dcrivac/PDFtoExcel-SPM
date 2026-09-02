@@ -28,6 +28,15 @@ enum TextSkew {
     private static let slopeStep: CGFloat = 0.002
     /// Roughly a quarter of the spacing between printed lines.
     private static let bandHeight: CGFloat = 0.008
+    /// How much better than level a tilt must score before it is believed.
+    ///
+    /// Some slope always scores marginally best, even on a square page: with
+    /// multiple columns of prose a slanted reading can line up one column's
+    /// rows against another's and edge ahead on noise alone. Measured over real
+    /// scanner output that spurious margin stayed under 5%, while genuinely
+    /// tilted pages gained 100% or more, because levelling collapses each row
+    /// from several bands into one. Anything in between is treated as square.
+    private static let believableGain = 1.3
     
     /// Tilt above which it is worth re-reading a levelled image.
     ///
@@ -72,6 +81,8 @@ enum TextSkew {
         
         let points = observations.map { ($0.boundingBox.midX, $0.boundingBox.midY) }
         
+        let levelScore = concentration(of: points, at: 0)
+        
         var bestSlope: CGFloat = 0
         var bestScore = -1.0
         
@@ -87,6 +98,8 @@ enum TextSkew {
             slope += slopeStep
         }
         
+        // Report square unless the winner is a clear improvement on level.
+        guard bestScore >= levelScore * believableGain else { return 0 }
         return bestSlope
     }
     
