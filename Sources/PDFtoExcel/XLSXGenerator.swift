@@ -37,12 +37,13 @@ class XLSXGenerator {
         try createDirectoryStructure(at: tempDir)
         
         // Generate XML files
-        try generateContentTypes(at: tempDir)
         try generateRelationships(at: tempDir)
         try generateApp(at: tempDir)
         try generateCore(at: tempDir, fileName: url.deletingPathExtension().lastPathComponent)
-        try generateWorkbook(at: tempDir, sheetCount: options.separateByPage ? tables.count : 1)
-        try generateWorkbookRels(at: tempDir, sheetCount: options.separateByPage ? tables.count : 1)
+        let sheetNames = options.separateByPage ? sheetNames(for: tables) : ["Sheet1"]
+        try generateContentTypes(at: tempDir, sheetCount: sheetNames.count)
+        try generateWorkbook(at: tempDir, names: sheetNames)
+        try generateWorkbookRels(at: tempDir, sheetCount: sheetNames.count)
         try generateStyles(at: tempDir, options: options)
         try generateSharedStrings(from: tables, at: tempDir)
         
@@ -72,7 +73,7 @@ class XLSXGenerator {
         }
         
         // Create ZIP archive
-        try createZipArchive(from: tempDir, to: url)
+        try createZipArchive(from: tempDir, to: url, sheetCount: sheetNames.count)
         
         logger.info("Successfully generated XLSX file at \(url.path)")
     }
@@ -97,7 +98,30 @@ class XLSXGenerator {
     
     // MARK: - Content Types
     
-    private func generateContentTypes(at baseURL: URL) throws {
+    /// A sheet name per table: the page it came from, made unique where a page
+    /// yields more than one table. Excel refuses a workbook whose sheets share
+    /// a name, and two tables on one page is ordinary.
+    private func sheetNames(for tables: [TableData]) -> [String] {
+        var seen: [Int: Int] = [:]
+        
+        return tables.map { table in
+            seen[table.pageNumber, default: 0] += 1
+            let occurrence = seen[table.pageNumber] ?? 1
+            return occurrence == 1
+                ? "Page \(table.pageNumber)"
+                : "Page \(table.pageNumber) (\(occurrence))"
+        }
+    }
+    
+    private func generateContentTypes(at baseURL: URL, sheetCount: Int) throws {
+        // Every worksheet needs its own override. Declaring only the first left
+        // the rest of a multi-page workbook untyped, which readers reject.
+        let worksheets = (1...max(sheetCount, 1)).map { index in
+            """
+                <Override PartName="/xl/worksheets/sheet\(index).xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+            """
+        }.joined(separator: "\n")
+        
         let xml = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -106,7 +130,7 @@ class XLSXGenerator {
             <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
             <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
             <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
-            <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+        \(worksheets)
             <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
             <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
         </Types>
@@ -170,12 +194,11 @@ class XLSXGenerator {
     
     // MARK: - Workbook
     
-    private func generateWorkbook(at baseURL: URL, sheetCount: Int) throws {
+    private func generateWorkbook(at baseURL: URL, names: [String]) throws {
         var sheets = ""
-        for i in 1...max(sheetCount, 1) {
-            let sheetName = sheetCount > 1 ? "Page \(i)" : "Sheet1"
+        for (index, name) in names.enumerated() {
             sheets += """
-                <sheet name="\(sheetName.xmlEscaped)" sheetId="\(i)" r:id="rId\(i)"/>
+                <sheet name="\(name.xmlEscaped)" sheetId="\(index + 1)" r:id="rId\(index + 1)"/>
             """
         }
         
@@ -352,6 +375,13 @@ class XLSXGenerator {
         let analyzer = TableStructureAnalyzer()
         let headerInfo = analyzer.detectHeaders(in: table)
         
+        // A frozen pane split at row zero is not a split at all; leave the view
+        // alone unless there is a header row to hold in place.
+        let freezePane = options.freezeHeaders && headerInfo.hasHeader
+            ? #"<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>"#
+            : ""
+
+        
         for (rowIndex, row) in table.enhancedCleanedRows.enumerated() {
             var cells = ""
             
@@ -380,9 +410,7 @@ class XLSXGenerator {
                 }
                 
                 // Generate cell XML
-                if let numericValue = Double(cell.replacingOccurrences(of: ",", with: "")
-                                                  .replacingOccurrences(of: "$", with: "")
-                                                  .replacingOccurrences(of: "%", with: "")) {
+                if let numericValue = numericValue(of: cell, as: dataType) {
                     // Numeric cell
                     cells += """
                         <c r="\(cellRef)" s="\(styleIndex)">
@@ -425,10 +453,10 @@ class XLSXGenerator {
         let xml = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-            <dimension ref="A1:\(columnLetter(table.columnCount - 1))\(table.rowCount)"/>
+            <dimension ref="\(dimension(of: table))"/>
             <sheetViews>
                 <sheetView tabSelected="\(index == 1 ? "1" : "0")" workbookViewId="0">
-                    <pane ySplit="\(headerInfo.hasHeader ? "1" : "0")" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+                    \(freezePane)
                 </sheetView>
             </sheetViews>
             <cols>
@@ -446,6 +474,31 @@ class XLSXGenerator {
     }
     
     // MARK: - Helper Methods
+    
+    /// The number to store for a cell, or nil if it is not a figure.
+    ///
+    /// A percentage is stored as the fraction it stands for. Excel's percent
+    /// formats scale by a hundred on the way to the screen, so storing the 12
+    /// read off the page as-is showed the reader 1200%.
+    private func numericValue(of cell: String, as type: DetectedDataType) -> Double? {
+        let bare = cell
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: "%", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        let stripped = String(bare.unicodeScalars.filter { $0.properties.generalCategory != .currencySymbol })
+        
+        guard let value = Double(stripped) else { return nil }
+        return type == .percentage ? value / 100 : value
+    }
+    
+    /// The range a sheet occupies, in A1 notation.
+    private func dimension(of table: TableData) -> String {
+        let rows = table.enhancedCleanedRows
+        let columns = rows.map(\.count).max() ?? 0
+        
+        guard columns > 0, !rows.isEmpty else { return "A1" }
+        return "A1:\(columnLetter(columns - 1))\(rows.count)"
+    }
     
     private func combineTables(_ tables: [TableData]) -> TableData {
         var allRows: [[String]] = []
@@ -497,9 +550,38 @@ class XLSXGenerator {
         return letter
     }
     
-    private func createZipArchive(from sourceURL: URL, to destinationURL: URL) throws {
-        // Use ZIPFoundation to create the archive
-        try FileManager.default.zipItem(at: sourceURL, to: destinationURL)
+    /// Package the staged parts as an OPC archive.
+    ///
+    /// Zipping the staging directory wholesale nested every part under that
+    /// directory's temporary name, so nothing could find `/xl/workbook.xml` and
+    /// no reader would open the result. The parts are added deliberately
+    /// instead, content types first, as the package format requires.
+    private func createZipArchive(from sourceURL: URL, to destinationURL: URL, sheetCount: Int) throws {
+        let archive = try Archive(url: destinationURL, accessMode: .create)
+        
+        for part in packageParts(sheetCount: sheetCount) {
+            try archive.addEntry(
+                with: part,
+                relativeTo: sourceURL,
+                compressionMethod: .deflate
+            )
+        }
+    }
+    
+    /// The parts this generator writes, in the order they belong in the package.
+    private func packageParts(sheetCount: Int) -> [String] {
+        var parts = [
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "docProps/app.xml",
+            "docProps/core.xml",
+            "xl/workbook.xml",
+            "xl/_rels/workbook.xml.rels",
+            "xl/styles.xml",
+            "xl/sharedStrings.xml"
+        ]
+        parts += (1...max(sheetCount, 1)).map { "xl/worksheets/sheet\($0).xml" }
+        return parts
     }
 }
 
@@ -528,44 +610,5 @@ extension String {
 extension Array {
     subscript(safe index: Index) -> Element? {
         return indices.contains(index) ? self[index] : nil
-    }
-}
-
-// MARK: - Integration Helper
-
-extension PDFToExcelConverter {
-    
-    /// Generate real XLSX file instead of renamed CSV
-    func generateRealXLSX(tables: [TableData], originalURL: URL, options: XLSXOptions = XLSXOptions()) throws -> URL {
-        // Determine output directory
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let outputDir = documents.appendingPathComponent("PDFtoExcel", isDirectory: true)
-        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
-        
-        let baseName = originalURL.deletingPathExtension().lastPathComponent + "_excel"
-        var outputURL = outputDir.appendingPathComponent(baseName).appendingPathExtension("xlsx")
-        
-        // Avoid overwriting
-        var counter = 2
-        while FileManager.default.fileExists(atPath: outputURL.path) {
-            let candidateName = "\(baseName) (\(counter))"
-            outputURL = outputDir.appendingPathComponent(candidateName).appendingPathExtension("xlsx")
-            counter += 1
-        }
-        
-        // Detect data types
-        let detector = DataTypeDetector()
-        let dataTypes = tables.map { detector.detectColumnTypes(table: $0) }
-        
-        // Generate XLSX
-        let generator = XLSXGenerator()
-        try generator.generateXLSX(
-            tables: tables,
-            withDataTypes: dataTypes,
-            to: outputURL,
-            options: options
-        )
-        
-        return outputURL
     }
 }

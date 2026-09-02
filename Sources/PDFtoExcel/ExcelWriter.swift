@@ -77,25 +77,4 @@ class ExcelWriter {
     func formatCSVCell(_ cell: String) -> String {
         return escapeCSVCell(cell)
     }
-    
-    // NOTE: Placeholder implementation.
-    // This method currently writes a CSV and then moves/renames it to .xlsx.
-    // The resulting file is not a true XLSX workbook. To produce real Excel files,
-    // implement XLSX packaging (ZIP + XML parts) or use an appropriate library.
-    func writeXLSX(tables: [TableData], to url: URL, separateByPage: Bool = true) throws {
-        // For now, fall back to CSV format
-        // In a real implementation, you'd use a library like xlsxwriter or create XML manually
-        let csvURL = url.appendingPathExtension("csv")
-        try writeCSV(tables: tables, to: csvURL, separateByPage: separateByPage)
-        
-        // Move the CSV file to have XLSX extension (placeholder)
-        do {
-            try FileManager.default.moveItem(at: csvURL, to: url)
-            logger.info("Created placeholder XLSX by moving CSV: \(url.lastPathComponent)")
-        } catch {
-            logger.error("Failed to create XLSX file: \(error.localizedDescription)")
-            throw ConversionError.fileWriteError
-        }
-    }
 }
-

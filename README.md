@@ -19,6 +19,11 @@ swift run PDFtoExcel
 Drag PDFs onto the window, use the file picker, or open a PDF with the app from
 Finder.
 
+With `xlsx` selected, the default engine writes a real Office Open XML workbook:
+one sheet per page, the detected column types carried through as number formats,
+and a frozen header row where one was found. `separateByPage` decides whether
+pages become separate sheets or run into one.
+
 Output goes to `Documents/PDFtoExcel/`. Which `Documents` that is depends on how
 the app is running: `swift run` is unsandboxed and writes to `~/Documents`, while
 the signed bundle from `make-app.sh` is sandboxed and writes inside its container
@@ -121,7 +126,9 @@ These appear in the Settings window but are **not yet wired to anything**:
 
 ## Known limitations
 
-- **The optimized engine always writes CSV.** It never calls `writeXLSX`, so an
+- **The optimized engine always writes CSV.** It writes through its own
+  `generateOptimizedExcelFile`, which hardcodes the extension and emits an
+  annotated CSV carrying confidence and column types in `#` comment lines, so an
   `xlsx` output setting is silently ignored while it is enabled. This is why it
   is opt-in rather than the default.
 - **Deskewing corrects a single global tilt per page.** Page curl from a book
@@ -134,9 +141,6 @@ These appear in the Settings window but are **not yet wired to anything**:
   default, which is fine locally but will be refused by Gatekeeper on another
   Mac. Pass `CODESIGN_IDENTITY` for a real identity; notarizing then also needs
   `xcrun notarytool`, which this repository does not automate.
-- **`XLSXGenerator` is not wired up.** Both engines write XLSX through
-  `ExcelWriter.writeXLSX`, which writes a CSV and renames it; the real workbook
-  generator is never called.
 
 ## Source layout
 

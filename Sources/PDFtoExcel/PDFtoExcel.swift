@@ -275,11 +275,18 @@ class PDFToExcelConverter: ObservableObject {
             counter += 1
         }
         
-        let writer = ExcelWriter()
         if outputFormat == .csv {
-            try writer.writeCSV(tables: tables, to: outputURL, separateByPage: separateByPage)
+            try ExcelWriter().writeCSV(tables: tables, to: outputURL, separateByPage: separateByPage)
         } else {
-            try writer.writeXLSX(tables: tables, to: outputURL, separateByPage: separateByPage)
+            // Column types drive the number formats the workbook carries, so a
+            // price reads as a price rather than as the digits it was OCR'd from.
+            let detector = DataTypeDetector()
+            try XLSXGenerator().generateXLSX(
+                tables: tables,
+                withDataTypes: tables.map { detector.detectColumnTypes(table: $0) },
+                to: outputURL,
+                options: XLSXOptions(separateByPage: separateByPage)
+            )
         }
         
         return outputURL
