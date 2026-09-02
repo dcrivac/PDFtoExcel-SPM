@@ -11,3 +11,6 @@ Packages/
 xcuserdata/
 DerivedData/
 *.xcuserstate
+
+# Local scan corpus used for manual testing (large binaries)
+pdf_test_files/
