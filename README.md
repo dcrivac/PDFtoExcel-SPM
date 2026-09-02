@@ -19,6 +19,25 @@ swift run PDFtoExcel
 Drag PDFs onto the window, or use the file picker. Output is written to
 `~/Documents/PDFtoExcel/`.
 
+### Building an .app
+
+SwiftPM produces a bare executable rather than an application bundle. To get a
+double-clickable, sandboxed app:
+
+```sh
+./Scripts/make-app.sh release          # -> build/PDFtoExcel.app
+open build/PDFtoExcel.app
+```
+
+The script assembles the bundle and applies the entitlements, which can only be
+attached when signing. It signs ad-hoc by default; set `CODESIGN_IDENTITY` to
+sign with a Developer ID, which also enables the hardened runtime and a secure
+timestamp.
+
+`Info.plist` itself is embedded directly into the executable by the linker (see
+the `-sectcreate` flags in `Package.swift`), so the bundle identifier and
+document types are available even when running the bare binary via `swift run`.
+
 ## How it works
 
 Every page goes through the same five stages:
@@ -92,10 +111,10 @@ These appear in the Settings window but are **not yet wired to anything**:
 - **OCR is the accuracy floor.** Below roughly 100 dpi the recognizer misreads
   words regardless of what the table logic does; no geometric correction
   recovers text that was never legible.
-- **`Info.plist` and the entitlements file are not bundled.** SwiftPM reports
-  them as unhandled resources, so the built binary does not carry them. Signing
-  or distributing the app needs an Xcode target or an explicit `resources:`
-  declaration.
+- **A notarized build needs a Developer ID.** `make-app.sh` signs ad-hoc by
+  default, which is fine locally but will be refused by Gatekeeper on another
+  Mac. Pass `CODESIGN_IDENTITY` for a real identity; notarizing then also needs
+  `xcrun notarytool`, which this repository does not automate.
 - **No automated tests.** Table detection was verified by hand against generated
   fixtures with known contents, covering multi-page documents, two tables on one
   page, blank cells, and simulated scans from zero to six degrees of tilt. Real

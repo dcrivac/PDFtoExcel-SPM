@@ -14,3 +14,6 @@ DerivedData/
 
 # Local scan corpus used for manual testing (large binaries)
 pdf_test_files/
+
+# Assembled application bundle
+build/
