@@ -388,6 +388,7 @@ final class EnhancedTableDetector: Sendable {
         // the same table it is the highest-confidence version that survives.
         let candidates = tables
             .filter { $0.confidence >= config.minConfidenceThreshold }
+            .filter(isTabular)
             .sorted { $0.confidence > $1.confidence }
         
         var uniqueTables: [TableData] = []
@@ -414,6 +415,22 @@ final class EnhancedTableDetector: Sendable {
         }
         
         return uniqueTables
+    }
+    
+    /// Whether this is a table at all, rather than a run of body text.
+    ///
+    /// The whitespace strategy will happily carry a paragraph forward as a
+    /// table of one column, since every line agrees on where that column starts.
+    /// Requiring rows that actually span columns keeps prose out: a table has
+    /// at least two of them, and most of its rows reach more than one.
+    private func isTabular(_ table: TableData) -> Bool {
+        guard table.columnCount >= 2 else { return false }
+        
+        let rowsSpanningColumns = table.rows.filter { row in
+            row.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count >= 2
+        }.count
+        
+        return rowsSpanningColumns * 2 >= table.rows.count
     }
     
     /// How much of the smaller table's content also appears in the larger one.
