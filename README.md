@@ -16,8 +16,13 @@ swift build
 swift run PDFtoExcel
 ```
 
-Drag PDFs onto the window, or use the file picker. Output is written to
-`~/Documents/PDFtoExcel/`.
+Drag PDFs onto the window, use the file picker, or open a PDF with the app from
+Finder.
+
+Output goes to `Documents/PDFtoExcel/`. Which `Documents` that is depends on how
+the app is running: `swift run` is unsandboxed and writes to `~/Documents`, while
+the signed bundle from `make-app.sh` is sandboxed and writes inside its container
+at `~/Library/Containers/com.pdftoexcel.app/Data/Documents/`.
 
 ### Building an .app
 

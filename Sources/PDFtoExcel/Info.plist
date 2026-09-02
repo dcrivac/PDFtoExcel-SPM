@@ -54,12 +54,14 @@
 			<string></string>
 			<key>CFBundleTypeName</key>
 			<string>PDF Document</string>
-			<key>CFBundleTypeOSTypes</key>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.adobe.pdf</string>
 			</array>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
 		</dict>
 	</array>
 	<key>UTExportedTypeDeclarations</key>

@@ -66,7 +66,7 @@ struct ProcessingQueueView: View {
             
             ToolbarSpacer(.flexible)
             
-            ToolbarItem(id: "add-files", placement: .primaryAction) {
+            ToolbarItem(id: "queue-add-files", placement: .primaryAction) {
                 AddFilesButton(processingManager: processingManager)
             }
         }

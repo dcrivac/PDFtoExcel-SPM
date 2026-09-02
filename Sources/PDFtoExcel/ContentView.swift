@@ -13,6 +13,7 @@ import AppKit
 #endif
 
 struct ContentView: View {
+    @EnvironmentObject private var appDelegate: AppDelegate
     @StateObject private var converter = PDFToExcelConverter()
     @State private var showingFilePicker = false
     @State private var showingAlert = false
@@ -37,8 +38,8 @@ struct ContentView: View {
             )
         }
         .navigationSplitViewStyle(.balanced)
-        .toolbar(id: "main-toolbar") {
-            ToolbarItem(id: "settings", placement: .primaryAction) {
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingSettings.toggle()
                 } label: {
@@ -46,7 +47,7 @@ struct ContentView: View {
                 }
             }
             
-            ToolbarItem(id: "clear", placement: .primaryAction) {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     withAnimation(.smooth) {
                         converter.clearProcessedFiles()
@@ -60,7 +61,7 @@ struct ContentView: View {
             
             ToolbarSpacer(.flexible)
             
-            ToolbarItem(id: "add-files", placement: .primaryAction) {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingFilePicker = true
                 } label: {
@@ -75,6 +76,13 @@ struct ContentView: View {
             allowsMultipleSelection: true
         ) { result in
             handleFileImport(result)
+        }
+        // Files opened from Finder, the Dock, or `open -a`, handed over by the
+        // application delegate.
+        .onReceive(appDelegate.$filesToOpen) { urls in
+            guard !urls.isEmpty else { return }
+            appDelegate.filesToOpen = []
+            Task { await converter.convertFiles(urls) }
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
