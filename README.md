@@ -43,6 +43,22 @@ timestamp.
 the `-sectcreate` flags in `Package.swift`), so the bundle identifier and
 document types are available even when running the bare binary via `swift run`.
 
+### Tests
+
+```sh
+swift test
+```
+
+The suite drives the detection heuristics on synthetic OCR output — pages built
+cell by cell in `Tests/PDFtoExcelTests/PageFixtures.swift`, where the layout is
+known exactly — so row grouping, column alignment, tilt correction and the prose
+filter can each be checked on their own. Two tests are marked as known issues:
+they assert the behaviour that is wanted and record that it does not hold yet
+(see *Known limitations*).
+
+`ScanCorpusTests` reads a real scan end to end through Vision. The corpus is
+large and local-only, so those tests skip when `pdf_test_files/` is absent.
+
 ## How it works
 
 Every page goes through the same five stages:
@@ -120,17 +136,26 @@ These appear in the Settings window but are **not yet wired to anything**:
   default, which is fine locally but will be refused by Gatekeeper on another
   Mac. Pass `CODESIGN_IDENTITY` for a real identity; notarizing then also needs
   `xcrun notarytool`, which this repository does not automate.
-- **No automated tests.** Table detection was verified by hand against generated
-  fixtures with known contents, covering multi-page documents, two tables on one
-  page, blank cells, and simulated scans from zero to six degrees of tilt. Real
-  scanner output has been checked for robustness and skew behaviour, but not
-  against a scanned document containing a real table.
+- **The bordered strategy misplaces cells after a blank.** `EnhancedTableDetector`'s
+  bordered reading takes a row's cells in x order and pads the end, so a blank
+  cell shifts every value after it one column left. The default engine places
+  each cell in the column it sits under; the same fix has not been applied to the
+  optimized engine. Covered by a known-issue test.
+- **Only dollar amounts are recognized as currency.** The symbol list in
+  `DataTypeDetector` was written to the file double-encoded, so it holds mojibake
+  rather than `€`, `£` and the rest, and no other currency matches. Covered by a
+  known-issue test.
+- **`XLSXGenerator` is not wired up.** Both engines write XLSX through
+  `ExcelWriter.writeXLSX`, which writes a CSV and renames it; the real workbook
+  generator is never called.
 
 ## Source layout
 
 | File | Role |
 | ---- | ---- |
 | `PDFtoExcel.swift` | `PDFToExcelConverter` — the default engine |
+| `PageTableParser.swift` | The default engine's page-to-tables parsing |
+| `TextRun.swift` | Positioned text, and the boundary with Vision |
 | `PerformanceOptimizations.swift` | `OptimizedPDFProcessor` and its cache |
 | `TableDetectionEnhancements.swift` | `EnhancedTableDetector`, used by the optimized engine |
 | `TextSkew.swift` | Page-tilt estimation |

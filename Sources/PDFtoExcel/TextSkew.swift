@@ -5,9 +5,9 @@
 //  Page tilt estimation for OCR output.
 //
 
+import CoreGraphics
 import CoreImage
 import Foundation
-import Vision
 
 /// Recovers the tilt of a scanned page from its recognized text.
 ///
@@ -66,20 +66,19 @@ enum TextSkew {
     
     private static let sharedContext = CIContext()
     
-    /// Vertical position of an observation once the page is levelled.
-    static func deskewedY(_ observation: VNRecognizedTextObservation, slope: CGFloat) -> CGFloat {
-        let box = observation.boundingBox
-        return box.midY - box.midX * slope
+    /// Vertical position of a run once the page is levelled.
+    static func deskewedY(_ run: TextRun, slope: CGFloat) -> CGFloat {
+        run.midY - run.midX * slope
     }
     
-    /// Estimated tilt of the page these observations came from.
+    /// Estimated tilt of the page these runs came from.
     ///
     /// Returns zero when there is too little text to judge, which leaves the
     /// caller's positions untouched.
-    static func estimateSlope(of observations: [VNRecognizedTextObservation]) -> CGFloat {
-        guard observations.count >= 4 else { return 0 }
+    static func estimateSlope(of runs: [TextRun]) -> CGFloat {
+        guard runs.count >= 4 else { return 0 }
         
-        let points = observations.map { ($0.boundingBox.midX, $0.boundingBox.midY) }
+        let points = runs.map { ($0.midX, $0.midY) }
         
         let levelScore = concentration(of: points, at: 0)
         

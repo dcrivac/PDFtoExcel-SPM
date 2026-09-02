@@ -35,7 +35,7 @@ enum TextRecognition {
     ) throws -> [VNRecognizedTextObservation] {
         let first = try read(image, configure: configure)
         
-        let slope = TextSkew.estimateSlope(of: first)
+        let slope = TextSkew.estimateSlope(of: TextRun.runs(from: first))
         let size = CGSize(width: image.width, height: image.height)
         let angle = TextSkew.angle(forSlope: slope, imageSize: size)
         guard abs(angle) >= TextSkew.rereadThreshold,

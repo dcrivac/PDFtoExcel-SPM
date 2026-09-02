@@ -52,6 +52,11 @@ let package = Package(
                     "-Xlinker", "Sources/PDFtoExcel/Info.plist"
                 ])
             ]
+        ),
+        .testTarget(
+            name: "PDFtoExcelTests",
+            dependencies: ["PDFtoExcel"],
+            path: "Tests/PDFtoExcelTests"
         )
     ]
 )

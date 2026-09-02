@@ -6,10 +6,8 @@
 //  Created by Assistant on 11/07/25.
 //
 
-import Foundation
-import Vision
-import PDFKit
 import CoreGraphics
+import Foundation
 import OSLog
 
 // MARK: - Enhanced Table Detection
@@ -33,13 +31,13 @@ final class EnhancedTableDetector: Sendable {
     
     // MARK: - Advanced Table Detection
     
-    func detectTables(from observations: [VNRecognizedTextObservation], pageNumber: Int) -> [TableData] {
+    func detectTables(from runs: [TextRun], pageNumber: Int) -> [TableData] {
         var detectedTables: [TableData] = []
         
         // Try multiple detection strategies
-        let whitespaceTable = detectWhitespaceTables(observations, pageNumber: pageNumber)
-        let borderTable = detectBorderedTables(observations, pageNumber: pageNumber)
-        let columnTable = detectColumnAlignedTables(observations, pageNumber: pageNumber)
+        let whitespaceTable = detectWhitespaceTables(runs, pageNumber: pageNumber)
+        let borderTable = detectBorderedTables(runs, pageNumber: pageNumber)
+        let columnTable = detectColumnAlignedTables(runs, pageNumber: pageNumber)
         
         // Merge and deduplicate results
         detectedTables.append(contentsOf: whitespaceTable)
@@ -52,32 +50,34 @@ final class EnhancedTableDetector: Sendable {
     
     // MARK: - Whitespace-Based Detection
     
-    private func detectWhitespaceTables(_ observations: [VNRecognizedTextObservation], pageNumber: Int) -> [TableData] {
+    private func detectWhitespaceTables(_ runs: [TextRun], pageNumber: Int) -> [TableData] {
         // Group text by vertical position with tighter tolerance
-        var rowGroups: [[VNRecognizedTextObservation]] = []
-        var processedObservations = Set<ObjectIdentifier>()
+        var rowGroups: [[TextRun]] = []
+        // Runs are values rather than objects, so membership is tracked by
+        // position in the input: two identical runs are still two runs.
+        var grouped = [Bool](repeating: false, count: runs.count)
         
         // A scanned page is rarely square to the platen, and past about a degree
         // and a half the climb across a row exceeds the tolerance below,
         // splitting one printed line into two. Level the page first.
-        let slope = TextSkew.estimateSlope(of: observations)
+        let slope = TextSkew.estimateSlope(of: runs)
         
-        for observation in observations {
-            guard !processedObservations.contains(ObjectIdentifier(observation)) else { continue }
+        for (index, run) in runs.enumerated() {
+            guard !grouped[index] else { continue }
             
-            var currentRow = [observation]
-            processedObservations.insert(ObjectIdentifier(observation))
+            var currentRow = [run]
+            grouped[index] = true
             
-            let yCenter = TextSkew.deskewedY(observation, slope: slope)
+            let yCenter = TextSkew.deskewedY(run, slope: slope)
             
-            // Find all observations on the same horizontal line
-            for other in observations {
-                guard !processedObservations.contains(ObjectIdentifier(other)) else { continue }
+            // Find all runs on the same horizontal line
+            for (otherIndex, other) in runs.enumerated() {
+                guard !grouped[otherIndex] else { continue }
                 
                 let otherYCenter = TextSkew.deskewedY(other, slope: slope)
                 if abs(yCenter - otherYCenter) <= config.yTolerance {
                     currentRow.append(other)
-                    processedObservations.insert(ObjectIdentifier(other))
+                    grouped[otherIndex] = true
                 }
             }
             
@@ -97,7 +97,7 @@ final class EnhancedTableDetector: Sendable {
         return identifyTableStructuresWithWhitespace(rowGroups, pageNumber: pageNumber)
     }
     
-    private func identifyTableStructuresWithWhitespace(_ rowGroups: [[VNRecognizedTextObservation]], pageNumber: Int) -> [TableData] {
+    private func identifyTableStructuresWithWhitespace(_ rowGroups: [[TextRun]], pageNumber: Int) -> [TableData] {
         var tables: [TableData] = []
         var currentTableRows: [[String]] = []
         var columnBoundaries: [CGFloat] = []
@@ -142,24 +142,24 @@ final class EnhancedTableDetector: Sendable {
     
     // MARK: - Column-Aligned Detection
     
-    private func detectColumnAlignedTables(_ observations: [VNRecognizedTextObservation], pageNumber: Int) -> [TableData] {
-        // Detect natural column alignment across all observations
-        let columnClusters = findColumnClusters(observations)
+    private func detectColumnAlignedTables(_ runs: [TextRun], pageNumber: Int) -> [TableData] {
+        // Detect natural column alignment across all runs
+        let columnClusters = findColumnClusters(runs)
         
         guard columnClusters.count >= 2 else { return [] }
         
-        // Group observations into rows based on Y position
-        let rows = groupIntoRows(observations, usingColumns: columnClusters)
+        // Group runs into rows based on Y position
+        let rows = groupIntoRows(runs, usingColumns: columnClusters)
         
         // Convert to table data
         return rows.isEmpty ? [] : [createTableData(from: rows, pageNumber: pageNumber)]
     }
     
-    private func findColumnClusters(_ observations: [VNRecognizedTextObservation]) -> [CGFloat] {
+    private func findColumnClusters(_ runs: [TextRun]) -> [CGFloat] {
         // Collect all X positions
         var xPositions: [CGFloat] = []
-        for obs in observations {
-            xPositions.append(obs.boundingBox.minX)
+        for run in runs {
+            xPositions.append(run.minX)
         }
         
         // Sort and cluster nearby positions
@@ -195,15 +195,15 @@ final class EnhancedTableDetector: Sendable {
     
     // MARK: - Bordered Table Detection
     
-    private func detectBorderedTables(_ observations: [VNRecognizedTextObservation], pageNumber: Int) -> [TableData] {
-        // Look for observations that form grid patterns
+    private func detectBorderedTables(_ runs: [TextRun], pageNumber: Int) -> [TableData] {
+        // Look for runs that form grid patterns
         var gridCells: [GridCell] = []
         
-        for obs in observations {
+        for run in runs {
             let cell = GridCell(
-                text: obs.topCandidates(1).first?.string ?? "",
-                bounds: obs.boundingBox,
-                confidence: obs.confidence
+                text: run.text,
+                bounds: run.boundingBox,
+                confidence: run.confidence
             )
             gridCells.append(cell)
         }
@@ -219,10 +219,10 @@ final class EnhancedTableDetector: Sendable {
     
     // MARK: - Helper Methods
     
-    private func extractColumnPositions(from row: [VNRecognizedTextObservation]) -> [CGFloat] {
+    private func extractColumnPositions(from row: [TextRun]) -> [CGFloat] {
         // Callers treat index order as column order, so keep these left to right
-        // regardless of the order the observations arrived in.
-        return row.map { $0.boundingBox.minX }.sorted()
+        // regardless of the order the runs arrived in.
+        return row.map { $0.minX }.sorted()
     }
     
     private func calculateColumnSimilarity(_ positions1: [CGFloat], _ positions2: [CGFloat]) -> Float {
@@ -242,12 +242,12 @@ final class EnhancedTableDetector: Sendable {
         return Float(matches) / Float(maxCount)
     }
     
-    private func extractTextFromRow(_ row: [VNRecognizedTextObservation], withColumns columns: [CGFloat]) -> [String] {
+    private func extractTextFromRow(_ row: [TextRun], withColumns columns: [CGFloat]) -> [String] {
         guard !columns.isEmpty else { return [] }
         var cells: [String] = Array(repeating: "", count: columns.count)
         
-        for obs in row {
-            guard let text = obs.topCandidates(1).first?.string else { continue }
+        for run in row {
+            let text = run.text
             
             // Assign to the nearest column reference rather than testing
             // half-open intervals keyed on exact positions. Column references
@@ -255,7 +255,7 @@ final class EnhancedTableDetector: Sendable {
             // its own column's reference would fall into the previous column and
             // overwrite whatever was already there. A couple of thousandths of a
             // page of OCR jitter is enough to trigger it.
-            let x = obs.boundingBox.minX
+            let x = run.minX
             var bestIndex = 0
             var bestDistance = abs(columns[0] - x)
             for (index, colX) in columns.enumerated().dropFirst() {
@@ -266,8 +266,8 @@ final class EnhancedTableDetector: Sendable {
                 }
             }
             
-            // Two observations can land in one column when a cell wraps or OCR
-            // splits it. Join them instead of letting the last one win.
+            // Two runs can land in one column when a cell wraps or OCR splits
+            // it. Join them instead of letting the last one win.
             cells[bestIndex] = cells[bestIndex].isEmpty
                 ? text
                 : cells[bestIndex] + " " + text
@@ -276,16 +276,16 @@ final class EnhancedTableDetector: Sendable {
         return cells
     }
     
-    private func groupIntoRows(_ observations: [VNRecognizedTextObservation], usingColumns columns: [CGFloat]) -> [[String]] {
-        // Group observations by Y coordinate
-        var rowDict: [CGFloat: [VNRecognizedTextObservation]] = [:]
+    private func groupIntoRows(_ runs: [TextRun], usingColumns columns: [CGFloat]) -> [[String]] {
+        // Group runs by Y coordinate
+        var rowDict: [CGFloat: [TextRun]] = [:]
         
-        for obs in observations {
-            let y = round(obs.boundingBox.midY * 100) / 100  // Round to 2 decimal places
+        for run in runs {
+            let y = round(run.midY * 100) / 100  // Round to 2 decimal places
             if rowDict[y] == nil {
                 rowDict[y] = []
             }
-            rowDict[y]?.append(obs)
+            rowDict[y]?.append(run)
         }
         
         // Sort rows and extract text
@@ -293,8 +293,8 @@ final class EnhancedTableDetector: Sendable {
         var rows: [[String]] = []
         
         for y in sortedYs {
-            guard let rowObs = rowDict[y] else { continue }
-            let row = extractTextFromRow(rowObs, withColumns: columns)
+            guard let rowRuns = rowDict[y] else { continue }
+            let row = extractTextFromRow(rowRuns, withColumns: columns)
             if !row.allSatisfy({ $0.isEmpty }) {
                 rows.append(row)
             }

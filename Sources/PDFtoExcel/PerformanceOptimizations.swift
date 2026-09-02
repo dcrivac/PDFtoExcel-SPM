@@ -241,7 +241,7 @@ class OptimizedPDFProcessor: ObservableObject {
         }
         
         // Use enhanced table detection
-        return tableDetector.detectTables(from: observations, pageNumber: pageNumber)
+        return tableDetector.detectTables(from: TextRun.runs(from: observations), pageNumber: pageNumber)
     }
     
     // MARK: - Memory Management
