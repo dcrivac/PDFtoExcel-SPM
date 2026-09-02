@@ -148,8 +148,12 @@ class DataTypeDetector {
     }
     
     private func isCurrency(_ value: String) -> Bool {
-        let currencySymbols = ["$", "â‚¬", "Â£", "Â¥", "â‚¹", "â‚½", "â‚©", "â‚ª", "â‚¦", "â‚¨"]
-        return currencySymbols.contains { value.contains($0) }
+        // Asked of Unicode rather than matched against a list of symbols. The
+        // list this replaced had been written to the file double-encoded, so
+        // every symbol in it but the dollar was mojibake and matched nothing a
+        // page could contain; a category test cannot be corrupted that way, and
+        // covers the currencies a hand-written list forgets.
+        value.unicodeScalars.contains { $0.properties.generalCategory == .currencySymbol }
     }
     
     private func isInteger(_ value: String) -> Bool {
@@ -158,11 +162,8 @@ class DataTypeDetector {
     }
     
     private func isDecimal(_ value: String) -> Bool {
-        var cleaned = value
-        cleaned = cleaned.replacingOccurrences(of: ",", with: "")
-        cleaned = cleaned.replacingOccurrences(of: "$", with: "")
-        cleaned = cleaned.replacingOccurrences(of: "â‚¬", with: "")
-        cleaned = cleaned.replacingOccurrences(of: "Â£", with: "")
+        var cleaned = value.replacingOccurrences(of: ",", with: "")
+        cleaned = String(cleaned.unicodeScalars.filter { $0.properties.generalCategory != .currencySymbol })
         cleaned = cleaned.trimmingCharacters(in: CharacterSet(charactersIn: "-+%"))
         
         let components = cleaned.split(separator: ".", maxSplits: 1)

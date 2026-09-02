@@ -52,9 +52,7 @@ swift test
 The suite drives the detection heuristics on synthetic OCR output — pages built
 cell by cell in `Tests/PDFtoExcelTests/PageFixtures.swift`, where the layout is
 known exactly — so row grouping, column alignment, tilt correction and the prose
-filter can each be checked on their own. One test is marked as a known issue: it
-asserts the behaviour that is wanted and records that it does not hold yet (see
-*Known limitations*).
+filter can each be checked on their own.
 
 `ScanCorpusTests` reads a real scan end to end through Vision. The corpus is
 large and local-only, so those tests skip when `pdf_test_files/` is absent.
@@ -136,10 +134,6 @@ These appear in the Settings window but are **not yet wired to anything**:
   default, which is fine locally but will be refused by Gatekeeper on another
   Mac. Pass `CODESIGN_IDENTITY` for a real identity; notarizing then also needs
   `xcrun notarytool`, which this repository does not automate.
-- **Only dollar amounts are recognized as currency.** The symbol list in
-  `DataTypeDetector` was written to the file double-encoded, so it holds mojibake
-  rather than `€`, `£` and the rest, and no other currency matches. Covered by a
-  known-issue test.
 - **`XLSXGenerator` is not wired up.** Both engines write XLSX through
   `ExcelWriter.writeXLSX`, which writes a CSV and renames it; the real workbook
   generator is never called.

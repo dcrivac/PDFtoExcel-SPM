@@ -89,13 +89,21 @@ struct DataTypeDetectorTests {
     
     @Test("Currencies other than the dollar are recognized")
     func nonDollarCurrencies() {
-        // Known issue: the symbol list in `isCurrency` was written to the file
-        // double-encoded, so it holds the mojibake "â‚¬" rather than "€" — and
-        // likewise for every other symbol. Only the dollar, which survives any
-        // encoding, is actually matched. The same corruption is in the
-        // replacements `isDecimal` makes.
-        withKnownIssue("Currency symbols in DataTypeDetector are double-encoded") {
-            #expect(types([["€100"], ["€250"], ["€75"]]) == [.currency])
-        }
+        #expect(types([["€100"], ["€250"], ["€75"]]) == [.currency])
+        #expect(types([["£100"], ["£250"], ["£75"]]) == [.currency])
+        #expect(types([["¥100"], ["¥250"], ["¥75"]]) == [.currency])
+        #expect(types([["₹100"], ["₹250"], ["₹75"]]) == [.currency])
+    }
+    
+    @Test("A column of bare figures is not currency")
+    func figuresAreNotCurrency() {
+        #expect(types([["100"], ["250"], ["75"]]) == [.integer])
+        #expect(types([["1.00"], ["2.50"], ["0.75"]]) == [.decimal])
+    }
+    
+    @Test("An amount is read as currency whichever side its symbol sits")
+    func symbolPosition() {
+        #expect(types([["100 €"], ["250 €"], ["75 €"]]) == [.currency])
+        #expect(types([["$100"], ["$250"], ["$75"]]) == [.currency])
     }
 }

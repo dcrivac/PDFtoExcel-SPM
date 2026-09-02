@@ -667,7 +667,7 @@ extension TableData {
         
         // Standardize currency symbols
         standardized = standardized.replacingOccurrences(of: "USD", with: "$")
-        standardized = standardized.replacingOccurrences(of: "EUR", with: "â‚¬")
+        standardized = standardized.replacingOccurrences(of: "EUR", with: "€")
         
         // Remove extra spaces
         standardized = standardized.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)

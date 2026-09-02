@@ -236,7 +236,7 @@ struct ProcessingJobRow: View {
                     Text(job.formattedFileSize)
                     
                     if job.status == .processing {
-                        Text("â€¢ \(job.estimatedTimeRemaining)")
+                        Text("• \(job.estimatedTimeRemaining)")
                     }
                 }
                 .font(.caption)

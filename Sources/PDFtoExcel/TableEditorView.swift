@@ -271,7 +271,7 @@ struct TableEditorView: View {
             HStack(spacing: 4) {
                 Image(systemName: "info.circle")
                     .foregroundColor(.secondary)
-                Text("Double-click cells to edit â€¢ Right-click for more options")
+                Text("Double-click cells to edit • Right-click for more options")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -461,8 +461,8 @@ struct TableListItem: View {
                 }
                 
                 HStack(spacing: 8) {
-                    Label("\(table.rows.count)Ã—\(table.columnCount)", systemImage: "tablecells")
-                    Text("â€¢")
+                    Label("\(table.rows.count)×\(table.columnCount)", systemImage: "tablecells")
+                    Text("•")
                     Label("P\(table.pageNumber)", systemImage: "doc.text")
                 }
                 .font(.caption)
