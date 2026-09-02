@@ -114,3 +114,10 @@ These appear in the Settings window but are **not yet wired to anything**:
 | `ExcelWriter.swift`, `XLSXGenerator.swift` | CSV and XLSX output |
 | `DataTypeDetector.swift` | Column type inference |
 | `ContentView.swift`, `SettingsView.swift`, `Processing*.swift` | SwiftUI interface |
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+The one dependency, [ZIPFoundation](https://github.com/weichsel/ZIPFoundation),
+is MIT as well.
